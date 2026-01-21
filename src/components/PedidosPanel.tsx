@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
-import { Trash2, Eye, X, Printer, Share2 } from "lucide-react";
+import { Trash2, Eye, X, Printer, Share2, Copy, Image as ImageIcon } from "lucide-react";
+import { toPng } from "html-to-image";
 
 type TenantCtx = {
   tenantId: string;
@@ -323,6 +324,26 @@ function openPrintWindow(order: OrderRow, tenant: TenantInfo | null) {
   w.document.close();
 }
 
+function dataUrlToFile(dataUrl: string, fileName: string) {
+  const arr = dataUrl.split(",");
+  const mimeMatch = arr[0].match(/:(.*?);/);
+  const mime = mimeMatch ? mimeMatch[1] : "image/png";
+  const bstr = atob(arr[1]);
+  let n = bstr.length;
+  const u8arr = new Uint8Array(n);
+  while (n--) u8arr[n] = bstr.charCodeAt(n);
+  return new File([u8arr], fileName, { type: mime });
+}
+
+function downloadDataUrl(dataUrl: string, filename: string) {
+  const a = document.createElement("a");
+  a.href = dataUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
 const emptyForm = (): OrderForm => ({
   dt_entrada: todayISO(),
   dt_saida: "",
@@ -349,6 +370,10 @@ export default function PedidosPanel() {
 
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [orders, setOrders] = useState<OrderRow[]>([]);
+
+  // ✅ contagem por status
+  const [statusCounts, setStatusCounts] = useState<Record<string, number>>({});
+  const [statusCountsLoading, setStatusCountsLoading] = useState(false);
 
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState<OrderForm>(emptyForm());
@@ -420,7 +445,7 @@ export default function PedidosPanel() {
         .from("tenants")
         .select("id, name, cnpj, ie, endereco, phone")
         .eq("id", ctx.tenantId)
-        .maybeSingle(); // ✅ melhor que single para diagnosticar 0 linhas
+        .maybeSingle();
 
       setTenantLoading(false);
 
@@ -430,8 +455,6 @@ export default function PedidosPanel() {
         setTenantError(error.message);
         return;
       }
-
-      console.log("[PEDIDOS] tenant loaded:", data);
 
       if (!data) {
         setTenantInfo(null);
@@ -444,6 +467,48 @@ export default function PedidosPanel() {
 
     loadTenant();
   }, [ctx?.tenantId]);
+
+  // ✅ carrega contagem por status (para renderizar só os que tem pedidos)
+  const loadStatusCounts = async () => {
+    if (!ctx) return;
+
+    setStatusCountsLoading(true);
+
+    try {
+      // Busca todos os pedidos do tenant (status apenas) e conta no client.
+      // (Evita precisar de GROUP BY via RPC / view)
+      const { data, error } = await supabase
+        .from("orders")
+        .select("status")
+        .eq("tenant_id", ctx.tenantId)
+        .limit(5000);
+
+      if (error) {
+        console.log("[PEDIDOS] loadStatusCounts error:", error);
+        return;
+      }
+
+      const map: Record<string, number> = {};
+      for (const row of (data || []) as any[]) {
+        const s = String(row.status || "");
+        if (!s) continue;
+        map[s] = (map[s] || 0) + 1;
+      }
+
+      setStatusCounts(map);
+
+      // se o status atual ficar sem pedidos, troca pro primeiro que tem
+      const current = statusTab as string;
+      const currentCount = map[current] || 0;
+      const keepAlways = "aberto"; // ✅ se quiser sempre mostrar e manter foco em aberto
+      if (current !== keepAlways && currentCount === 0) {
+        const firstWith = STATUSES.find((st) => (map[st] || 0) > 0);
+        if (firstWith) setStatusTab(firstWith);
+      }
+    } finally {
+      setStatusCountsLoading(false);
+    }
+  };
 
   const loadOrders = async (status: string) => {
     if (!ctx) return;
@@ -471,6 +536,7 @@ export default function PedidosPanel() {
 
   useEffect(() => {
     if (!ctx) return;
+    loadStatusCounts();
     loadOrders(statusTab);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ctx, statusTab]);
@@ -524,7 +590,10 @@ export default function PedidosPanel() {
     }
 
     if (form.id === o.id) resetForm();
+
+    // ✅ recarrega lista + contagens
     await loadOrders(statusTab);
+    await loadStatusCounts();
   };
 
   const searchClients = async (query: string) => {
@@ -649,7 +718,9 @@ export default function PedidosPanel() {
       const savedStatus = form.status as any;
       resetForm();
       setStatusTab(savedStatus);
+
       await loadOrders(savedStatus);
+      await loadStatusCounts();
     } finally {
       setSaving(false);
     }
@@ -675,6 +746,16 @@ export default function PedidosPanel() {
     );
   }
 
+  // ✅ status visíveis (só os que tem pedidos)
+  // Regra: sempre mostrar "aberto" (principal) mesmo se 0
+  const ALWAYS_SHOW: (typeof STATUSES)[number][] = ["aberto"];
+
+  const visibleStatuses = STATUSES.filter((s) => {
+    const count = statusCounts[s] || 0;
+    if (ALWAYS_SHOW.includes(s)) return true;
+    return count > 0;
+  });
+
   return (
     <div className="space-y-4">
       {/* FORM */}
@@ -684,9 +765,7 @@ export default function PedidosPanel() {
             <div className="font-bold text-lg">{isEdit ? "Editar Pedido" : "Novo Pedido"}</div>
             <div className="text-sm text-gray-600">Status atual: {form.status}</div>
             {tenantError && (
-              <div className="text-xs text-red-600 mt-1">
-                Tenant não carregou: {tenantError}
-              </div>
+              <div className="text-xs text-red-600 mt-1">Tenant não carregou: {tenantError}</div>
             )}
           </div>
 
@@ -811,94 +890,109 @@ export default function PedidosPanel() {
             />
           </label>
         </div>
-      </div>
+     </div>
 
       {/* LISTA */}
       <div className="border rounded p-4">
-        <div className="flex flex-wrap gap-2">
-          {STATUSES.map((s) => (
-            <button
-              key={s}
-              onClick={() => setStatusTab(s)}
-              className={`px-3 py-2 rounded border ${statusTab === s ? "bg-black text-white" : ""}`}
-            >
-              {s}
-            </button>
-          ))}
-        </div>
-
-        <div className="mt-4 overflow-auto">
-          {ordersLoading ? (
-            <div className="text-gray-600">Carregando pedidos...</div>
-          ) : (
-            <table className="min-w-full border">
-              <thead>
-                <tr className="bg-gray-50 text-left">
-                  <th className="border px-3 py-2">Entrada</th>
-                  <th className="border px-3 py-2">Cliente</th>
-                  <th className="border px-3 py-2">Item</th>
-                  <th className="border px-3 py-2">Valor</th>
-                  <th className="border px-3 py-2">Status</th>
-                  <th className="border px-3 py-2">Ações</th>
-                </tr>
-              </thead>
-
-              <tbody>
-                {orders.length === 0 ? (
-                  <tr>
-                    <td colSpan={6} className="border px-3 py-3 text-gray-600">
-                      Nenhum pedido neste status.
-                    </td>
-                  </tr>
-                ) : (
-                  orders.map((o) => (
-                    <tr key={o.id} className="hover:bg-gray-50">
-                      <td className="border px-3 py-2">{o.dt_entrada}</td>
-
-                      <td className="border px-3 py-2">
-                        <div className="font-medium">{o.cliente_nome}</div>
-                        <div className="text-xs text-gray-600">
-                          {o.cliente_telefone ? maskPhone(o.cliente_telefone) : ""}
-                        </div>
-                      </td>
-
-                      <td className="border px-3 py-2">{o.item || ""}</td>
-
-                      <td className="border px-3 py-2">{formatBRLFromNumber(Number(o.valor) || 0)}</td>
-
-                      <td className="border px-3 py-2">{o.status}</td>
-
-                      <td className="border px-3 py-2">
-                        <div className="flex gap-2 items-center">
-                          <button className="border px-2 py-1 rounded" onClick={() => pickOrderToEdit(o)}>
-                            Editar
-                          </button>
-
-                          <button
-                            className="border px-2 py-1 rounded inline-flex items-center gap-1"
-                            onClick={() => openPreview(o)}
-                            title="Visualizar"
-                          >
-                            <Eye size={16} />
-                            Visualizar
-                          </button>
-
-                          <button
-                            className="border px-2 py-1 rounded inline-flex items-center justify-center"
-                            onClick={() => removeOrder(o)}
-                            title="Excluir"
-                          >
-                            <Trash2 size={16} />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+        <div className="flex flex-wrap gap-2 items-center">
+          {statusCountsLoading && (
+            <div className="text-xs text-gray-500 mr-2">Atualizando status...</div>
           )}
+
+          {visibleStatuses.map((s) => {
+            const count = statusCounts[s] || 0;
+            const label = `${s} (${count})`;
+
+            return (
+              <button
+                key={s}
+                onClick={() => setStatusTab(s)}
+                className={`px-3 py-2 rounded border ${statusTab === s ? "bg-black text-white" : ""}`}
+                title={label}
+              >
+                {label}
+              </button>
+            );
+          })}
         </div>
+<div className="mt-4 overflow-auto">
+  {ordersLoading ? (
+    <div className="text-gray-600">Carregando pedidos...</div>
+  ) : (
+    <table className="min-w-full border">
+      <thead>
+        <tr className="bg-gray-50 text-left">
+          <th className="border px-3 py-2">Entrada</th>
+          <th className="border px-3 py-2">Cliente</th>
+          <th className="border px-3 py-2">Item</th>
+          <th className="border px-3 py-2">Valor</th>
+          <th className="border px-3 py-2">Status</th>
+          <th className="border px-3 py-2">Ações</th>
+        </tr>
+      </thead>
+
+      <tbody>
+        {orders.length === 0 ? (
+          <tr>
+            <td colSpan={6} className="border px-3 py-3 text-gray-600">
+              Nenhum pedido neste status.
+            </td>
+          </tr>
+        ) : (
+          orders.map((o) => (
+            <tr key={o.id} className="hover:bg-gray-50">
+              <td className="border px-3 py-2">{o.dt_entrada}</td>
+
+              <td className="border px-3 py-2">
+                <div className="font-medium">{o.cliente_nome}</div>
+                <div className="text-xs text-gray-600">
+                  {o.cliente_telefone ? maskPhone(o.cliente_telefone) : ""}
+                </div>
+              </td>
+
+              <td className="border px-3 py-2">{o.item || ""}</td>
+
+              <td className="border px-3 py-2">
+                {formatBRLFromNumber(Number(o.valor) || 0)}
+              </td>
+
+              <td className="border px-3 py-2">{o.status}</td>
+
+              <td className="border px-3 py-2">
+                <div className="flex gap-2 items-center">
+                  <button
+                    className="border px-2 py-1 rounded"
+                    onClick={() => pickOrderToEdit(o)}
+                  >
+                    Editar
+                  </button>
+
+                  <button
+                    className="border px-2 py-1 rounded inline-flex items-center gap-1"
+                    onClick={() => openPreview(o)}
+                    title="Visualizar"
+                  >
+                    <Eye size={16} />
+                    Visualizar
+                  </button>
+
+                  <button
+                    className="border px-2 py-1 rounded inline-flex items-center justify-center"
+                    onClick={() => removeOrder(o)}
+                    title="Excluir"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+              </td>
+            </tr>
+          ))
+        )}
+      </tbody>
+    </table>
+  )}
+</div>
+
       </div>
 
       {/* MODAL */}
@@ -949,15 +1043,77 @@ function PreviewModal(props: {
   onPrint: () => void;
   onShare: () => void;
 }) {
-  const itens = useMemo(
-    () => parseDescriptionToPreviewItems(props.order.descricao),
-    [props.order.descricao]
-  );
+  const itens = useMemo(() => parseDescriptionToPreviewItems(props.order.descricao), [props.order.descricao]);
 
   const totalCalc = useMemo(() => {
     const t = itens.reduce((acc, it) => acc + (it.value || 0), 0);
     return t > 0 ? t : Number(props.order.valor) || 0;
   }, [itens, props.order.valor]);
+
+  const previewRef = useRef<HTMLDivElement | null>(null);
+
+  const [shareOpen, setShareOpen] = useState(false);
+  const [sharingImg, setSharingImg] = useState(false);
+  const shareBoxRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setShareOpen(false);
+    };
+
+    const onClickOutside = (e: MouseEvent) => {
+      if (!shareOpen) return;
+      const el = shareBoxRef.current;
+      if (!el) return;
+      if (e.target instanceof Node && !el.contains(e.target)) setShareOpen(false);
+    };
+
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("mousedown", onClickOutside);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("mousedown", onClickOutside);
+    };
+  }, [shareOpen]);
+
+  const shareImage = async () => {
+    if (!previewRef.current) return;
+
+    setSharingImg(true);
+    try {
+      const dataUrl = await toPng(previewRef.current, {
+        cacheBust: true,
+        pixelRatio: 2,
+        backgroundColor: "#ffffff",
+      });
+
+      const fileName = `pedido-${props.order.dt_entrada || new Date().toISOString().slice(0, 10)}.png`;
+      const file = dataUrlToFile(dataUrl, fileName);
+
+      const navAny = navigator as any;
+      const canShareFiles =
+        typeof navAny !== "undefined" &&
+        typeof navAny.share === "function" &&
+        typeof navAny.canShare === "function" &&
+        navAny.canShare({ files: [file] });
+
+      if (canShareFiles) {
+        await navAny.share({
+          title: "Pedido",
+          text: "Segue o pedido em imagem.",
+          files: [file],
+        });
+      } else {
+        downloadDataUrl(dataUrl, fileName);
+        alert("Imagem gerada! Fiz o download do PNG (seu navegador não suportou compartilhar arquivo).");
+      }
+    } catch (err: any) {
+      console.log("[PEDIDOS] share image error:", err);
+      alert("Não foi possível gerar a imagem. Veja o console para detalhes.");
+    } finally {
+      setSharingImg(false);
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
@@ -970,7 +1126,7 @@ function PreviewModal(props: {
         </div>
 
         <div className="p-5 overflow-auto max-h-[75vh]">
-          <div className="border-2 border-black rounded-lg p-4">
+          <div ref={previewRef} className="border-2 border-black rounded-lg p-4 bg-white">
             <div className="text-sm">
               {props.tenantLoading ? (
                 <div className="text-gray-600">Carregando dados da empresa...</div>
@@ -1054,7 +1210,7 @@ function PreviewModal(props: {
               </table>
             </div>
 
-            <div className="text-right font-extrabold text-xl mt-4">
+           <div className="text-right font-extrabold text-xl mt-4">
               TOTAL: {formatBRLFromNumber(totalCalc)}
             </div>
           </div>
@@ -1066,10 +1222,45 @@ function PreviewModal(props: {
             Imprimir
           </button>
 
-          <button className="border px-3 py-2 rounded inline-flex items-center gap-2" onClick={props.onShare}>
-            <Share2 size={16} />
-            Compartilhar
-          </button>
+          <div className="relative" ref={shareBoxRef}>
+            <button
+              className="border px-3 py-2 rounded inline-flex items-center gap-2"
+              onClick={() => setShareOpen((v) => !v)}
+              type="button"
+            >
+              <Share2 size={16} />
+              Compartilhar
+            </button>
+
+            {shareOpen && (
+              <div className="absolute right-0 bottom-12 z-50 w-64 rounded border bg-white shadow overflow-hidden">
+                <button
+                  type="button"
+                  className="w-full px-3 py-2 flex items-center gap-2 hover:bg-gray-50"
+                  onClick={async () => {
+                    setShareOpen(false);
+                    await props.onShare();
+                  }}
+                >
+                  <Copy size={16} />
+                  Copiar texto
+                </button>
+
+                <button
+                  type="button"
+                  className="w-full px-3 py-2 flex items-center gap-2 hover:bg-gray-50 disabled:opacity-60"
+                  disabled={sharingImg}
+                  onClick={async () => {
+                    setShareOpen(false);
+                    await shareImage();
+                  }}
+                >
+                  <ImageIcon size={16} />
+                  {sharingImg ? "Gerando imagem..." : "Gerar / compartilhar imagem"}
+                </button>
+              </div>
+            )}
+          </div>
 
           <button className="bg-black text-white px-3 py-2 rounded" onClick={props.onClose}>
             Fechar
