@@ -35,6 +35,8 @@ type ClientMini = {
   telefone: string;
 };
 
+type DiscountType = "none" | "percent" | "amount";
+
 type OrderRow = {
   id: string;
   created_at: string;
@@ -48,7 +50,15 @@ type OrderRow = {
 
   item: string | null;
   descricao: string | null;
+
+  // ✅ valor final (com desconto)
   valor: number;
+
+  // ✅ campos novos
+  valor_bruto: number | null;
+  desconto_tipo: string | null; // "percent" | "amount" | null
+  desconto_valor: number | null;
+
   status: string;
 };
 
@@ -64,7 +74,14 @@ type OrderForm = {
 
   item: string;
   descricao: string;
+
+  // ✅ este campo na UI representa o BRUTO (antes do desconto)
   valor: string;
+
+  // ✅ desconto
+  desconto_tipo: DiscountType;
+  desconto_valor: string;
+
   status: string;
 };
 
@@ -146,6 +163,39 @@ function parseBRLToNumber(brl: string) {
   return Number.isFinite(n) ? n : 0;
 }
 
+function clamp(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n));
+}
+
+function calcDiscount(subtotal: number, type: DiscountType, valueInput: string) {
+  const v = parseBRLToNumber(valueInput);
+
+  if (subtotal <= 0) {
+    return { discount: 0, total: 0 };
+  }
+
+  if (type === "none") {
+    return { discount: 0, total: subtotal };
+  }
+
+  if (type === "percent") {
+    // aqui o valueInput vem como "10" (não moeda) se o usuário digitar "10"
+    // então vamos interpretar como percentual direto.
+    // Se digitarem "10,5" funciona também.
+    const pct = clamp(
+      Number(String(valueInput || "").replace(".", "").replace(",", ".")) || 0,
+      0,
+      100
+    );
+    const discount = clamp((subtotal * pct) / 100, 0, subtotal);
+    return { discount, total: subtotal - discount };
+  }
+
+  // amount: valueInput é BRL, então v já é R$ correto
+  const discount = clamp(v, 0, subtotal);
+  return { discount, total: subtotal - discount };
+}
+
 function calculateTotalFromDescription(desc: string): number {
   if (!desc) return 0;
 
@@ -221,8 +271,30 @@ function buildShareText(order: OrderRow, tenant: TenantInfo | null) {
   }
 
   const itens = parseDescriptionToPreviewItems(order.descricao);
-  const totalItens = itens.reduce((acc, it) => acc + (it.value || 0), 0);
-  const totalFinal = totalItens > 0 ? totalItens : Number(order.valor) || 0;
+  const subtotalFromItens = itens.reduce((acc, it) => acc + (it.value || 0), 0);
+
+  const subtotal =
+    (order.valor_bruto != null && Number(order.valor_bruto) >= 0
+      ? Number(order.valor_bruto)
+      : 0) ||
+    (subtotalFromItens > 0 ? subtotalFromItens : 0) ||
+    Number(order.valor || 0);
+
+  const discountType: DiscountType =
+    order.desconto_tipo === "percent"
+      ? "percent"
+      : order.desconto_tipo === "amount"
+      ? "amount"
+      : "none";
+
+  const discountValueStr =
+    discountType === "percent"
+      ? String(order.desconto_valor ?? 0)
+      : maskBRL(String(Math.round(Number(order.desconto_valor || 0) * 100)));
+
+  const { discount, total } = calcDiscount(subtotal, discountType, discountValueStr);
+
+  const totalFinal = Number(order.valor || 0) || total;
 
   const lines = [
     `Olá ${cliente}, aqui é ${empresa}`,
@@ -236,6 +308,13 @@ function buildShareText(order: OrderRow, tenant: TenantInfo | null) {
           (it) => `- ${it.n}) ${it.desc} — ${formatBRLFromNumber(it.value)}`
         )
       : ["- 1) —"]),
+    "",
+    `SUBTOTAL: ${formatBRLFromNumber(subtotal)}`,
+    discount > 0
+      ? `DESCONTO: -${formatBRLFromNumber(discount)}${
+          discountType === "percent" ? ` (${order.desconto_valor ?? 0}%)` : ""
+        }`
+      : "",
     `TOTAL: ${formatBRLFromNumber(totalFinal)}`,
   ].filter(Boolean);
 
@@ -253,8 +332,30 @@ function escapeHtml(str: string) {
 
 function openPrintWindow(order: OrderRow, tenant: TenantInfo | null) {
   const itens = parseDescriptionToPreviewItems(order.descricao);
-  const total = itens.reduce((acc, it) => acc + (it.value || 0), 0);
-  const totalFinal = total > 0 ? total : Number(order.valor) || 0;
+  const subtotalItens = itens.reduce((acc, it) => acc + (it.value || 0), 0);
+
+  const subtotal =
+    (order.valor_bruto != null && Number(order.valor_bruto) >= 0
+      ? Number(order.valor_bruto)
+      : 0) ||
+    (subtotalItens > 0 ? subtotalItens : 0) ||
+    Number(order.valor) ||
+    0;
+
+  const discountType: DiscountType =
+    order.desconto_tipo === "percent"
+      ? "percent"
+      : order.desconto_tipo === "amount"
+      ? "amount"
+      : "none";
+
+  const discountValueStr =
+    discountType === "percent"
+      ? String(order.desconto_valor ?? 0)
+      : maskBRL(String(Math.round(Number(order.desconto_valor || 0) * 100)));
+
+  const { discount, total } = calcDiscount(subtotal, discountType, discountValueStr);
+  const totalFinal = Number(order.valor || 0) || total;
 
   const html = `
 <!doctype html>
@@ -271,7 +372,11 @@ function openPrintWindow(order: OrderRow, tenant: TenantInfo | null) {
     th, td { border: 2px solid #111; padding: 8px; font-size: 12px; }
     th { text-align:left; background: #f5f5f5; }
     .right { text-align:right; }
-    .total { font-weight: 800; font-size: 16px; text-align:right; margin-top: 10px;}
+    .totals { margin-top: 10px; font-size: 12px; }
+    .totals .row { display:flex; justify-content:flex-end; gap:16px; margin-top: 6px; }
+    .totals .label { min-width: 110px; text-align:right; }
+    .totals .value { min-width: 140px; text-align:right; font-weight: 700; }
+    .grand { font-weight: 900; font-size: 16px; }
   </style>
 </head>
 <body>
@@ -321,7 +426,7 @@ function openPrintWindow(order: OrderRow, tenant: TenantInfo | null) {
         ${
           itens.length === 0
             ? `<tr><td>1</td><td>—</td><td class="right">${formatBRLFromNumber(
-                totalFinal
+                subtotal
               )}</td></tr>`
             : itens
                 .map(
@@ -337,7 +442,21 @@ function openPrintWindow(order: OrderRow, tenant: TenantInfo | null) {
       </tbody>
     </table>
 
-    <div class="total">TOTAL: ${formatBRLFromNumber(totalFinal)}</div>
+    <div class="totals">
+      <div class="row"><div class="label">SUBTOTAL:</div><div class="value">${formatBRLFromNumber(
+        subtotal
+      )}</div></div>
+      ${
+        discount > 0
+          ? `<div class="row"><div class="label">DESCONTO:</div><div class="value">-${formatBRLFromNumber(
+              discount
+            )}${discountType === "percent" ? ` (${order.desconto_valor ?? 0}%)` : ""}</div></div>`
+          : ""
+      }
+      <div class="row grand"><div class="label">TOTAL:</div><div class="value">${formatBRLFromNumber(
+        totalFinal
+      )}</div></div>
+    </div>
   </div>
 
   <script>
@@ -391,7 +510,12 @@ const emptyForm = (): OrderForm => ({
 
   item: "",
   descricao: "",
+
   valor: "",
+
+  desconto_tipo: "none",
+  desconto_valor: "",
+
   status: "aberto",
 });
 
@@ -553,7 +677,7 @@ export default function PedidosPanel() {
     const { data, error } = await supabase
       .from("orders")
       .select(
-        "id, created_at, dt_entrada, dt_saida, client_id, cliente_nome, cliente_telefone, item, descricao, valor, status"
+        "id, created_at, dt_entrada, dt_saida, client_id, cliente_nome, cliente_telefone, item, descricao, valor, valor_bruto, desconto_tipo, desconto_valor, status"
       )
       .eq("tenant_id", ctx.tenantId)
       .eq("status", status)
@@ -587,7 +711,22 @@ export default function PedidosPanel() {
   };
 
   const pickOrderToEdit = (o: OrderRow) => {
-    const valorMasked = maskBRL(String(Math.round(Number(o.valor || 0) * 100)));
+    const bruto = o.valor_bruto != null ? Number(o.valor_bruto) : Number(o.valor || 0);
+    const valorMasked = maskBRL(String(Math.round((bruto || 0) * 100)));
+
+    const descontoTipo: DiscountType =
+      o.desconto_tipo === "percent"
+        ? "percent"
+        : o.desconto_tipo === "amount"
+        ? "amount"
+        : "none";
+
+    const descontoValor =
+      descontoTipo === "percent"
+        ? String(o.desconto_valor ?? "")
+        : descontoTipo === "amount"
+        ? maskBRL(String(Math.round(Number(o.desconto_valor || 0) * 100)))
+        : "";
 
     setForm({
       id: o.id,
@@ -599,6 +738,8 @@ export default function PedidosPanel() {
       item: o.item || "",
       descricao: o.descricao || "",
       valor: valorMasked,
+      desconto_tipo: descontoTipo,
+      desconto_valor: descontoValor,
       status: o.status,
     });
 
@@ -785,8 +926,33 @@ export default function PedidosPanel() {
     const cliente_nome = (form.cliente_nome || clientQ || "").trim();
     if (!cliente_nome) return alert("Selecione ou digite o cliente.");
 
-    const valorN = parseBRLToNumber(form.valor);
-    if (valorN <= 0) return alert("Preencha um valor maior que zero.");
+    const valorBruto = parseBRLToNumber(form.valor);
+    if (valorBruto <= 0) return alert("Preencha um valor maior que zero.");
+
+    // ✅ calcula desconto e total final
+    const { discount, total } = calcDiscount(
+      valorBruto,
+      form.desconto_tipo,
+      form.desconto_valor
+    );
+
+    const descontoTipoDb =
+      form.desconto_tipo === "percent"
+        ? "percent"
+        : form.desconto_tipo === "amount"
+        ? "amount"
+        : null;
+
+    const descontoValorDb =
+      form.desconto_tipo === "none"
+        ? null
+        : form.desconto_tipo === "percent"
+        ? clamp(
+            Number(String(form.desconto_valor || "").replace(".", "").replace(",", ".")) || 0,
+            0,
+            100
+          )
+        : clamp(parseBRLToNumber(form.desconto_valor), 0, valorBruto);
 
     setSaving(true);
 
@@ -828,7 +994,13 @@ export default function PedidosPanel() {
         cliente_telefone: finalTelefoneNorm,
         item: form.item ? form.item.trim() : null,
         descricao: form.descricao ? form.descricao.trim() : null,
-        valor: valorN,
+
+        // ✅ salva bruto + desconto + final
+        valor_bruto: valorBruto,
+        desconto_tipo: descontoTipoDb,
+        desconto_valor: descontoValorDb,
+        valor: total,
+
         status: form.status,
         updated_by: ctx.userId,
       };
@@ -903,6 +1075,13 @@ export default function PedidosPanel() {
     if (ALWAYS_SHOW.includes(s)) return true;
     return count > 0;
   });
+
+  const brutoUI = parseBRLToNumber(form.valor);
+  const { discount: discountUI, total: totalUI } = calcDiscount(
+    brutoUI,
+    form.desconto_tipo,
+    form.desconto_valor
+  );
 
   return (
     <div className="space-y-4">
@@ -1032,11 +1211,109 @@ export default function PedidosPanel() {
           />
 
           <Field
-            label="Valor *"
+            label="Valor (subtotal) *"
             value={form.valor}
             onChange={(v) => setForm((s) => ({ ...s, valor: maskBRL(v) }))}
             placeholder="0,00"
           />
+
+          {/* ✅ DESCONTO */}
+          <label className="block">
+            <div className="text-sm font-medium mb-1">Desconto</div>
+            <select
+              className="border rounded px-3 py-2 w-full"
+              value={form.desconto_tipo}
+              onChange={(e) => {
+                const next = e.target.value as DiscountType;
+                setForm((s) => ({
+                  ...s,
+                  desconto_tipo: next,
+                  desconto_valor: next === "none" ? "" : s.desconto_valor,
+                }));
+              }}
+            >
+              <option value="none">Sem desconto</option>
+              <option value="percent">Percentual (%)</option>
+              <option value="amount">Em reais (R$)</option>
+            </select>
+          </label>
+
+          <label className="block">
+            <div className="text-sm font-medium mb-1">
+              {form.desconto_tipo === "percent"
+                ? "Valor do desconto (%)"
+                : form.desconto_tipo === "amount"
+                ? "Valor do desconto (R$)"
+                : "Valor do desconto"}
+            </div>
+
+            <input
+              className="border rounded px-3 py-2 w-full disabled:opacity-60"
+              disabled={form.desconto_tipo === "none"}
+              value={form.desconto_valor}
+              onChange={(e) => {
+                const v = e.target.value;
+
+                if (form.desconto_tipo === "percent") {
+                  // permite "10" ou "10,5"
+                  const cleaned = v
+                    .replace(/[^\d,]/g, "")
+                    .replace(/(,.*),/g, "$1");
+                  setForm((s) => ({ ...s, desconto_valor: cleaned }));
+                } else if (form.desconto_tipo === "amount") {
+                  setForm((s) => ({
+                    ...s,
+                    desconto_valor: maskBRL(v),
+                  }));
+                } else {
+                  setForm((s) => ({ ...s, desconto_valor: "" }));
+                }
+              }}
+              placeholder={
+                form.desconto_tipo === "percent"
+                  ? "Ex: 10"
+                  : form.desconto_tipo === "amount"
+                  ? "Ex: 50,00"
+                  : ""
+              }
+            />
+          </label>
+
+          {/* ✅ RESUMO */}
+          <div className="md:col-span-3">
+            <div className="border rounded p-3 bg-slate-50 text-sm">
+              <div className="flex flex-wrap gap-6">
+                <div>
+                  <div className="text-xs text-slate-600">Subtotal</div>
+                  <div className="font-semibold">
+                    {formatBRLFromNumber(brutoUI)}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-xs text-slate-600">Desconto</div>
+                  <div className="font-semibold">
+                    -{formatBRLFromNumber(discountUI)}
+                    {form.desconto_tipo === "percent" && form.desconto_valor
+                      ? ` (${form.desconto_valor}%)`
+                      : ""}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-xs text-slate-600">Total</div>
+                  <div className="font-extrabold text-base">
+                    {formatBRLFromNumber(totalUI)}
+                  </div>
+                </div>
+              </div>
+
+              <div className="text-xs text-slate-500 mt-2">
+                Observação: o total final será salvo em <b>valor</b> e o subtotal
+                em <b>valor_bruto</b>.
+              </div>
+            </div>
+          </div>
 
           <label className="block md:col-span-3">
             <div className="text-sm font-medium mb-1">
@@ -1104,7 +1381,7 @@ export default function PedidosPanel() {
                   <th className="border px-3 py-2">Entrada</th>
                   <th className="border px-3 py-2">Cliente</th>
                   <th className="border px-3 py-2">Item</th>
-                  <th className="border px-3 py-2">Valor</th>
+                  <th className="border px-3 py-2">Total</th>
                   <th className="border px-3 py-2">Status</th>
                   <th className="border px-3 py-2">Ações</th>
                 </tr>
@@ -1135,6 +1412,14 @@ export default function PedidosPanel() {
 
                       <td className="border px-3 py-2">
                         {formatBRLFromNumber(Number(o.valor) || 0)}
+                        {o.desconto_tipo && o.desconto_valor != null ? (
+                          <div className="text-xs text-slate-600">
+                            desconto{" "}
+                            {o.desconto_tipo === "percent"
+                              ? `${o.desconto_valor}%`
+                              : formatBRLFromNumber(Number(o.desconto_valor) || 0)}
+                          </div>
+                        ) : null}
                       </td>
 
                       <td className="border px-3 py-2">{o.status}</td>
@@ -1227,10 +1512,40 @@ function PreviewModal(props: {
     [props.order.descricao]
   );
 
-  const totalCalc = useMemo(() => {
-    const t = itens.reduce((acc, it) => acc + (it.value || 0), 0);
-    return t > 0 ? t : Number(props.order.valor) || 0;
-  }, [itens, props.order.valor]);
+  const subtotal = useMemo(() => {
+    const itensTotal = itens.reduce((acc, it) => acc + (it.value || 0), 0);
+
+    if (props.order.valor_bruto != null && Number(props.order.valor_bruto) >= 0) {
+      return Number(props.order.valor_bruto) || 0;
+    }
+
+    if (itensTotal > 0) return itensTotal;
+    return Number(props.order.valor) || 0;
+  }, [itens, props.order.valor, props.order.valor_bruto]);
+
+  const discountType: DiscountType = useMemo(() => {
+    if (props.order.desconto_tipo === "percent") return "percent";
+    if (props.order.desconto_tipo === "amount") return "amount";
+    return "none";
+  }, [props.order.desconto_tipo]);
+
+  const discountValueStr = useMemo(() => {
+    if (discountType === "percent") return String(props.order.desconto_valor ?? 0);
+    if (discountType === "amount")
+      return maskBRL(String(Math.round(Number(props.order.desconto_valor || 0) * 100)));
+    return "";
+  }, [discountType, props.order.desconto_valor]);
+
+  const { discount, total } = useMemo(
+    () => calcDiscount(subtotal, discountType, discountValueStr),
+    [subtotal, discountType, discountValueStr]
+  );
+
+  const totalFinal = useMemo(() => {
+    // valor salvo já deve ser o total final
+    const saved = Number(props.order.valor || 0);
+    return saved > 0 ? saved : total;
+  }, [props.order.valor, total]);
 
   const previewRef = useRef<HTMLDivElement | null>(null);
 
@@ -1354,7 +1669,6 @@ function PreviewModal(props: {
                 </div>
               ) : (
                 <>
-                  {/* ✅ Cabeçalho sem caixa e com logo MAIOR à direita */}
                   <div className="grid grid-cols-[1fr_240px] gap-4 items-start">
                     <div className="min-w-0">
                       <div className="font-bold text-base">
@@ -1448,7 +1762,7 @@ function PreviewModal(props: {
                       <td className="border-2 border-black px-3 py-2">1</td>
                       <td className="border-2 border-black px-3 py-2">—</td>
                       <td className="border-2 border-black px-3 py-2 text-right">
-                        {formatBRLFromNumber(totalCalc)}
+                        {formatBRLFromNumber(subtotal)}
                       </td>
                     </tr>
                   ) : (
@@ -1470,8 +1784,24 @@ function PreviewModal(props: {
               </table>
             </div>
 
-            <div className="text-right font-extrabold text-xl mt-4">
-              TOTAL: {formatBRLFromNumber(totalCalc)}
+            {/* ✅ TOTAIS */}
+            <div className="mt-4 text-sm flex flex-col items-end gap-1">
+              <div>
+                <b>SUBTOTAL:</b> {formatBRLFromNumber(subtotal)}
+              </div>
+
+              {discount > 0 ? (
+                <div>
+                  <b>DESCONTO:</b> -{formatBRLFromNumber(discount)}
+                  {discountType === "percent"
+                    ? ` (${props.order.desconto_valor ?? 0}%)`
+                    : ""}
+                </div>
+              ) : null}
+
+              <div className="font-extrabold text-xl">
+                TOTAL: {formatBRLFromNumber(totalFinal)}
+              </div>
             </div>
           </div>
         </div>

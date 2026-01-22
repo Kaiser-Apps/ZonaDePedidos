@@ -17,14 +17,6 @@ export default function AppHome() {
 
   return (
     <main className="min-h-screen">
-      <div className="border-b px-6 py-4 flex items-center justify-between">
-        <div>
-          <div className="text-xl font-bold">KaiserApps</div>
-          <div className="text-sm text-gray-600">Sistema de Pedidos</div>
-        </div>
-
-      </div>
-
       <div className="px-6 pt-4 flex gap-2">
         <button
           onClick={() => setTab("pedidos")}
