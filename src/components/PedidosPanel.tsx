@@ -2,7 +2,15 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
-import { Trash2, Eye, X, Printer, Share2, Copy, Image as ImageIcon } from "lucide-react";
+import {
+  Trash2,
+  Eye,
+  X,
+  Printer,
+  Share2,
+  Copy,
+  Image as ImageIcon,
+} from "lucide-react";
 import { toPng } from "html-to-image";
 
 type TenantCtx = {
@@ -92,7 +100,9 @@ function maskPhone(value: string) {
     return v.replace(
       /(\d{2})(\d{0,4})(\d{0,4})/,
       (_, ddd, p1, p2) =>
-        `${ddd ? "(" + ddd + ")" : ""}${p1 ? " " + p1 : ""}${p2 ? "-" + p2 : ""}`
+        `${ddd ? "(" + ddd + ")" : ""}${p1 ? " " + p1 : ""}${
+          p2 ? "-" + p2 : ""
+        }`
     );
   }
 
@@ -195,26 +205,35 @@ function parseDescriptionToPreviewItems(desc: string | null): PreviewItem[] {
 }
 
 function buildShareText(order: OrderRow, tenant: TenantInfo | null) {
+  const cliente = (order.cliente_nome || "").trim() || "Cliente";
+  const empresa = (tenant?.name || "").trim() || "nossa empresa";
+  const status = String(order.status || "").trim().toLowerCase();
+
+  let headline = `Detalhes do Pedido - ${order.status}`;
+  if (status === "aberto") {
+    headline = "Segue detalhes do seu pedido aberto conosco.";
+  } else if (status === "orçamento" || status === "orcamento") {
+    headline = "Segue detalhes do seu orçamento.";
+  } else if (status === "aguardando retirada") {
+    headline = "Seu pedido já está pronto e aguardando retirada.";
+  }
+
   const itens = parseDescriptionToPreviewItems(order.descricao);
-  const total = itens.reduce((acc, it) => acc + (it.value || 0), 0);
-  const totalFinal = total > 0 ? total : Number(order.valor) || 0;
+  const totalItens = itens.reduce((acc, it) => acc + (it.value || 0), 0);
+  const totalFinal = totalItens > 0 ? totalItens : Number(order.valor) || 0;
 
   const lines = [
-    tenant?.name ? `Empresa: ${tenant.name}` : "",
-    tenant?.cnpj ? `CNPJ: ${tenant.cnpj}` : "",
-    tenant?.ie ? `IE: ${tenant.ie}` : "",
-    tenant?.endereco ? `Endereço: ${tenant.endereco}` : "",
-    tenant?.phone ? `Fone: ${maskPhone(tenant.phone)}` : "",
-    "",
-    `Pedido (${order.status})`,
+    `Olá ${cliente}, aqui é ${empresa}`,
+    headline,
     `Data: ${order.dt_entrada}`,
-    `Cliente: ${order.cliente_nome}`,
-    order.cliente_telefone ? `Fone cliente: ${maskPhone(order.cliente_telefone)}` : "",
+    "",
     order.item ? `Item: ${order.item}` : "",
-    "",
     "Itens:",
-    ...itens.map((it) => `- ${it.n}) ${it.desc} — ${formatBRLFromNumber(it.value)}`),
-    "",
+    ...(itens.length > 0
+      ? itens.map(
+          (it) => `- ${it.n}) ${it.desc} — ${formatBRLFromNumber(it.value)}`
+        )
+      : ["- 1) —"]),
     `TOTAL: ${formatBRLFromNumber(totalFinal)}`,
   ].filter(Boolean);
 
@@ -257,7 +276,9 @@ function openPrintWindow(order: OrderRow, tenant: TenantInfo | null) {
   <div class="box">
     <div class="muted">
       <div><b>${tenant?.name || ""}</b></div>
-      <div>${tenant?.cnpj ? `<b>CNPJ:</b> ${tenant.cnpj}` : ""} ${tenant?.ie ? `&nbsp;&nbsp;<b>IE:</b> ${tenant.ie}` : ""}</div>
+      <div>${tenant?.cnpj ? `<b>CNPJ:</b> ${tenant.cnpj}` : ""} ${
+    tenant?.ie ? `&nbsp;&nbsp;<b>IE:</b> ${tenant.ie}` : ""
+  }</div>
       <div>${tenant?.endereco ? `<b>Endereço:</b> ${tenant.endereco}` : ""}</div>
       <div>${tenant?.phone ? `<b>Fone:</b> ${maskPhone(tenant.phone)}` : ""}</div>
     </div>
@@ -268,7 +289,9 @@ function openPrintWindow(order: OrderRow, tenant: TenantInfo | null) {
       <div><b>Data:</b> ${order.dt_entrada}</div>
       <div><b>Status:</b> ${order.status}</div>
       <div><b>Cliente:</b> ${escapeHtml(order.cliente_nome)}</div>
-      <div><b>Fone:</b> ${order.cliente_telefone ? maskPhone(order.cliente_telefone) : ""}</div>
+      <div><b>Fone:</b> ${
+        order.cliente_telefone ? maskPhone(order.cliente_telefone) : ""
+      }</div>
     </div>
 
     <div class="hr"></div>
@@ -290,7 +313,9 @@ function openPrintWindow(order: OrderRow, tenant: TenantInfo | null) {
       <tbody>
         ${
           itens.length === 0
-            ? `<tr><td>1</td><td>—</td><td class="right">${formatBRLFromNumber(totalFinal)}</td></tr>`
+            ? `<tr><td>1</td><td>—</td><td class="right">${formatBRLFromNumber(
+                totalFinal
+              )}</td></tr>`
             : itens
                 .map(
                   (it) => `
@@ -344,6 +369,11 @@ function downloadDataUrl(dataUrl: string, filename: string) {
   a.remove();
 }
 
+function isDuplicateErr(err: any) {
+  const msg = (err?.message || "").toLowerCase();
+  return err?.code === "23505" || msg.includes("duplicate") || msg.includes("uq_");
+}
+
 const emptyForm = (): OrderForm => ({
   dt_entrada: todayISO(),
   dt_saida: "",
@@ -371,7 +401,6 @@ export default function PedidosPanel() {
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [orders, setOrders] = useState<OrderRow[]>([]);
 
-  // ✅ contagem por status
   const [statusCounts, setStatusCounts] = useState<Record<string, number>>({});
   const [statusCountsLoading, setStatusCountsLoading] = useState(false);
 
@@ -413,7 +442,9 @@ export default function PedidosPanel() {
 
       if (profErr || !prof?.tenant_id) {
         console.log("[PEDIDOS] profiles error:", profErr);
-        alert("Seu usuário não está vinculado a uma empresa (tenant). Confira a tabela profiles.");
+        alert(
+          "Seu usuário não está vinculado a uma empresa (tenant). Confira a tabela profiles."
+        );
         if (alive) {
           setCtx(null);
           setCtxLoading(false);
@@ -433,7 +464,6 @@ export default function PedidosPanel() {
     };
   }, []);
 
-  // ✅ carrega dados do tenant (com diagnóstico)
   useEffect(() => {
     const loadTenant = async () => {
       if (!ctx?.tenantId) return;
@@ -458,7 +488,9 @@ export default function PedidosPanel() {
 
       if (!data) {
         setTenantInfo(null);
-        setTenantError("Nenhum tenant retornado (provável RLS sem policy de SELECT).");
+        setTenantError(
+          "Nenhum tenant retornado (provável RLS sem policy de SELECT)."
+        );
         return;
       }
 
@@ -468,15 +500,12 @@ export default function PedidosPanel() {
     loadTenant();
   }, [ctx?.tenantId]);
 
-  // ✅ carrega contagem por status (para renderizar só os que tem pedidos)
   const loadStatusCounts = async () => {
     if (!ctx) return;
 
     setStatusCountsLoading(true);
 
     try {
-      // Busca todos os pedidos do tenant (status apenas) e conta no client.
-      // (Evita precisar de GROUP BY via RPC / view)
       const { data, error } = await supabase
         .from("orders")
         .select("status")
@@ -497,10 +526,9 @@ export default function PedidosPanel() {
 
       setStatusCounts(map);
 
-      // se o status atual ficar sem pedidos, troca pro primeiro que tem
       const current = statusTab as string;
       const currentCount = map[current] || 0;
-      const keepAlways = "aberto"; // ✅ se quiser sempre mostrar e manter foco em aberto
+      const keepAlways = "aberto";
       if (current !== keepAlways && currentCount === 0) {
         const firstWith = STATUSES.find((st) => (map[st] || 0) > 0);
         if (firstWith) setStatusTab(firstWith);
@@ -516,7 +544,9 @@ export default function PedidosPanel() {
 
     const { data, error } = await supabase
       .from("orders")
-      .select("id, created_at, dt_entrada, dt_saida, client_id, cliente_nome, cliente_telefone, item, descricao, valor, status")
+      .select(
+        "id, created_at, dt_entrada, dt_saida, client_id, cliente_nome, cliente_telefone, item, descricao, valor, status"
+      )
       .eq("tenant_id", ctx.tenantId)
       .eq("status", status)
       .order("dt_entrada", { ascending: false })
@@ -591,7 +621,6 @@ export default function PedidosPanel() {
 
     if (form.id === o.id) resetForm();
 
-    // ✅ recarrega lista + contagens
     await loadOrders(statusTab);
     await loadStatusCounts();
   };
@@ -655,6 +684,90 @@ export default function PedidosPanel() {
     setClientOptions([]);
   };
 
+  const ensureClientId = async (args: {
+    tenantId: string;
+    userId: string;
+    cliente_nome: string;
+    cliente_telefone: string;
+    currentClientId: string;
+  }): Promise<{ clientId: string; telefoneNorm: string | null }> => {
+    const current = (args.currentClientId || "").trim();
+    if (current) {
+      const telNorm = args.cliente_telefone
+        ? onlyDigits(args.cliente_telefone)
+        : "";
+      return { clientId: current, telefoneNorm: telNorm || null };
+    }
+
+    const nome = (args.cliente_nome || "").trim();
+    const telefoneNorm = args.cliente_telefone
+      ? onlyDigits(args.cliente_telefone)
+      : "";
+
+    if (!telefoneNorm) {
+      throw new Error(
+        "Para cadastrar um cliente novo, informe o telefone do cliente."
+      );
+    }
+
+    const { data: found, error: findErr } = await supabase
+      .from("clients")
+      .select("id, telefone")
+      .eq("tenant_id", args.tenantId)
+      .eq("telefone", telefoneNorm)
+      .maybeSingle();
+
+    if (findErr) {
+      console.log("[PEDIDOS] ensureClientId find error:", findErr);
+    }
+
+    if (found?.id) {
+      return { clientId: String(found.id), telefoneNorm };
+    }
+
+    const insertPayload = {
+      tenant_id: args.tenantId,
+      nome: nome || "Sem nome",
+      telefone: telefoneNorm,
+      endereco: null,
+      cpf: null,
+      cnpj: null,
+      ie: null,
+      created_by: args.userId,
+      updated_by: args.userId,
+    };
+
+    const { data: inserted, error: insErr } = await supabase
+      .from("clients")
+      .insert([insertPayload])
+      .select("id")
+      .maybeSingle();
+
+    if (insErr) {
+      if (isDuplicateErr(insErr)) {
+        const { data: found2 } = await supabase
+          .from("clients")
+          .select("id")
+          .eq("tenant_id", args.tenantId)
+          .eq("telefone", telefoneNorm)
+          .maybeSingle();
+
+        if (found2?.id) {
+          return { clientId: String(found2.id), telefoneNorm };
+        }
+      }
+
+      console.log("[PEDIDOS] ensureClientId insert error:", insErr);
+      throw new Error("Não foi possível cadastrar o cliente automaticamente.");
+    }
+
+    if (!inserted?.id) {
+      throw new Error("Cliente não retornou ID após cadastro.");
+    }
+
+    return { clientId: String(inserted.id), telefoneNorm };
+  };
+
   const save = async () => {
     if (!ctx) return;
 
@@ -669,21 +782,49 @@ export default function PedidosPanel() {
 
     setSaving(true);
 
-    const payload = {
-      tenant_id: ctx.tenantId,
-      dt_entrada,
-      dt_saida: form.dt_saida ? form.dt_saida : null,
-      client_id: form.client_id ? form.client_id : null,
-      cliente_nome,
-      cliente_telefone: form.cliente_telefone ? onlyDigits(form.cliente_telefone) : null,
-      item: form.item ? form.item.trim() : null,
-      descricao: form.descricao ? form.descricao.trim() : null,
-      valor: valorN,
-      status: form.status,
-      updated_by: ctx.userId,
-    };
-
     try {
+      let finalClientId: string | null = form.client_id ? form.client_id : null;
+      let finalTelefoneNorm: string | null = form.cliente_telefone
+        ? onlyDigits(form.cliente_telefone)
+        : null;
+
+      try {
+        const ensured = await ensureClientId({
+          tenantId: ctx.tenantId,
+          userId: ctx.userId,
+          cliente_nome,
+          cliente_telefone: form.cliente_telefone || "",
+          currentClientId: form.client_id || "",
+        });
+
+        finalClientId = ensured.clientId || null;
+        finalTelefoneNorm = ensured.telefoneNorm || null;
+
+        if (finalClientId && finalClientId !== form.client_id) {
+          setForm((s) => ({
+            ...s,
+            client_id: finalClientId || "",
+          }));
+        }
+      } catch (e: any) {
+        alert(e?.message || "Erro ao garantir cadastro do cliente.");
+        return;
+      }
+
+      const payload = {
+        tenant_id: ctx.tenantId,
+        dt_entrada,
+        dt_saida: form.dt_saida ? form.dt_saida : null,
+        client_id: finalClientId,
+        cliente_nome,
+        cliente_telefone: finalTelefoneNorm,
+        item: form.item ? form.item.trim() : null,
+        descricao: form.descricao ? form.descricao.trim() : null,
+        valor: valorN,
+        status: form.status,
+        updated_by: ctx.userId,
+      };
+
       if (isEdit && form.id) {
         const { error } = await supabase
           .from("orders")
@@ -740,14 +881,13 @@ export default function PedidosPanel() {
       <div className="border rounded p-4">
         <div className="font-semibold">Pedidos</div>
         <div className="text-red-600 mt-2">
-          Não foi possível carregar seu tenant. Verifique se existe um registro na tabela <b>profiles</b> para seu usuário.
+          Não foi possível carregar seu tenant. Verifique se existe um registro
+          na tabela <b>profiles</b> para seu usuário.
         </div>
       </div>
     );
   }
 
-  // ✅ status visíveis (só os que tem pedidos)
-  // Regra: sempre mostrar "aberto" (principal) mesmo se 0
   const ALWAYS_SHOW: (typeof STATUSES)[number][] = ["aberto"];
 
   const visibleStatuses = STATUSES.filter((s) => {
@@ -758,25 +898,38 @@ export default function PedidosPanel() {
 
   return (
     <div className="space-y-4">
-      {/* FORM */}
       <div className="border rounded p-4">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <div className="font-bold text-lg">{isEdit ? "Editar Pedido" : "Novo Pedido"}</div>
-            <div className="text-sm text-gray-600">Status atual: {form.status}</div>
+            <div className="font-bold text-lg">
+              {isEdit ? "Editar Pedido" : "Novo Pedido"}
+            </div>
+            <div className="text-sm text-gray-600">
+              Status atual: {form.status}
+            </div>
             {tenantError && (
-              <div className="text-xs text-red-600 mt-1">Tenant não carregou: {tenantError}</div>
+              <div className="text-xs text-red-600 mt-1">
+                Tenant não carregou: {tenantError}
+              </div>
             )}
           </div>
 
           <div className="flex gap-2">
             {isEdit && (
-              <button className="border px-3 py-2 rounded" onClick={resetForm} disabled={saving}>
+              <button
+                className="border px-3 py-2 rounded"
+                onClick={resetForm}
+                disabled={saving}
+              >
                 Cancelar edição
               </button>
             )}
 
-            <button className="bg-black text-white px-3 py-2 rounded" onClick={save} disabled={saving}>
+            <button
+              className="bg-black text-white px-3 py-2 rounded"
+              onClick={save}
+              disabled={saving}
+            >
               {saving ? "Salvando..." : isEdit ? "Atualizar" : "Salvar"}
             </button>
           </div>
@@ -802,7 +955,9 @@ export default function PedidosPanel() {
             <select
               className="border rounded px-3 py-2 w-full"
               value={form.status}
-              onChange={(e) => setForm((s) => ({ ...s, status: e.target.value }))}
+              onChange={(e) =>
+                setForm((s) => ({ ...s, status: e.target.value }))
+              }
             >
               {STATUSES.map((s) => (
                 <option key={s} value={s}>
@@ -823,34 +978,41 @@ export default function PedidosPanel() {
               onBlur={() => setTimeout(() => setShowClientDropdown(false), 150)}
             />
 
-            {showClientDropdown && (clientLoading || clientOptions.length > 0) && (
-              <div className="absolute z-10 mt-1 w-full border bg-white rounded shadow">
-                {clientLoading ? (
-                  <div className="p-3 text-sm text-gray-600">Buscando...</div>
-                ) : clientOptions.length === 0 ? (
-                  <div className="p-3 text-sm text-gray-600">Nenhum cliente encontrado.</div>
-                ) : (
-                  clientOptions.map((c) => (
-                    <button
-                      key={c.id}
-                      type="button"
-                      className="w-full text-left px-3 py-2 hover:bg-gray-50"
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => pickClient(c)}
-                    >
-                      <div className="font-medium">{c.nome}</div>
-                      <div className="text-xs text-gray-600">{maskPhone(c.telefone || "")}</div>
-                    </button>
-                  ))
-                )}
-              </div>
-            )}
+            {showClientDropdown &&
+              (clientLoading || clientOptions.length > 0) && (
+                <div className="absolute z-10 mt-1 w-full border bg-white rounded shadow">
+                  {clientLoading ? (
+                    <div className="p-3 text-sm text-gray-600">Buscando...</div>
+                  ) : clientOptions.length === 0 ? (
+                    <div className="p-3 text-sm text-gray-600">
+                      Nenhum cliente encontrado.
+                    </div>
+                  ) : (
+                    clientOptions.map((c) => (
+                      <button
+                        key={c.id}
+                        type="button"
+                        className="w-full text-left px-3 py-2 hover:bg-gray-50"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => pickClient(c)}
+                      >
+                        <div className="font-medium">{c.nome}</div>
+                        <div className="text-xs text-gray-600">
+                          {maskPhone(c.telefone || "")}
+                        </div>
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
           </div>
 
           <Field
             label="Telefone do cliente"
             value={form.cliente_telefone}
-            onChange={(v) => setForm((s) => ({ ...s, cliente_telefone: maskPhone(v) }))}
+            onChange={(v) =>
+              setForm((s) => ({ ...s, cliente_telefone: maskPhone(v) }))
+            }
             placeholder="(11) 99999-9999"
           />
 
@@ -869,7 +1031,9 @@ export default function PedidosPanel() {
           />
 
           <label className="block md:col-span-3">
-            <div className="text-sm font-medium mb-1">Descrição (soma automática por linha)</div>
+            <div className="text-sm font-medium mb-1">
+              Descrição (soma automática por linha)
+            </div>
             <textarea
               className="border rounded px-3 py-2 w-full min-h-[110px]"
               value={form.descricao}
@@ -880,7 +1044,8 @@ export default function PedidosPanel() {
                 setForm((s) => ({
                   ...s,
                   descricao: desc,
-                  valor: total > 0 ? maskBRL(String(Math.round(total * 100))) : s.valor,
+                  valor:
+                    total > 0 ? maskBRL(String(Math.round(total * 100))) : s.valor,
                 }));
               }}
               placeholder={`Ex:
@@ -890,13 +1055,14 @@ export default function PedidosPanel() {
             />
           </label>
         </div>
-     </div>
+      </div>
 
-      {/* LISTA */}
       <div className="border rounded p-4">
         <div className="flex flex-wrap gap-2 items-center">
           {statusCountsLoading && (
-            <div className="text-xs text-gray-500 mr-2">Atualizando status...</div>
+            <div className="text-xs text-gray-500 mr-2">
+              Atualizando status...
+            </div>
           )}
 
           {visibleStatuses.map((s) => {
@@ -907,7 +1073,9 @@ export default function PedidosPanel() {
               <button
                 key={s}
                 onClick={() => setStatusTab(s)}
-                className={`px-3 py-2 rounded border ${statusTab === s ? "bg-black text-white" : ""}`}
+                className={`px-3 py-2 rounded border ${
+                  statusTab === s ? "bg-black text-white" : ""
+                }`}
                 title={label}
               >
                 {label}
@@ -915,87 +1083,86 @@ export default function PedidosPanel() {
             );
           })}
         </div>
-<div className="mt-4 overflow-auto">
-  {ordersLoading ? (
-    <div className="text-gray-600">Carregando pedidos...</div>
-  ) : (
-    <table className="min-w-full border">
-      <thead>
-        <tr className="bg-gray-50 text-left">
-          <th className="border px-3 py-2">Entrada</th>
-          <th className="border px-3 py-2">Cliente</th>
-          <th className="border px-3 py-2">Item</th>
-          <th className="border px-3 py-2">Valor</th>
-          <th className="border px-3 py-2">Status</th>
-          <th className="border px-3 py-2">Ações</th>
-        </tr>
-      </thead>
 
-      <tbody>
-        {orders.length === 0 ? (
-          <tr>
-            <td colSpan={6} className="border px-3 py-3 text-gray-600">
-              Nenhum pedido neste status.
-            </td>
-          </tr>
-        ) : (
-          orders.map((o) => (
-            <tr key={o.id} className="hover:bg-gray-50">
-              <td className="border px-3 py-2">{o.dt_entrada}</td>
+        <div className="mt-4 overflow-auto">
+          {ordersLoading ? (
+            <div className="text-gray-600">Carregando pedidos...</div>
+          ) : (
+            <table className="min-w-full border">
+              <thead>
+                <tr className="bg-gray-50 text-left">
+                  <th className="border px-3 py-2">Entrada</th>
+                  <th className="border px-3 py-2">Cliente</th>
+                  <th className="border px-3 py-2">Item</th>
+                  <th className="border px-3 py-2">Valor</th>
+                  <th className="border px-3 py-2">Status</th>
+                  <th className="border px-3 py-2">Ações</th>
+                </tr>
+              </thead>
 
-              <td className="border px-3 py-2">
-                <div className="font-medium">{o.cliente_nome}</div>
-                <div className="text-xs text-gray-600">
-                  {o.cliente_telefone ? maskPhone(o.cliente_telefone) : ""}
-                </div>
-              </td>
+              <tbody>
+                {orders.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="border px-3 py-3 text-gray-600">
+                      Nenhum pedido neste status.
+                    </td>
+                  </tr>
+                ) : (
+                  orders.map((o) => (
+                    <tr key={o.id} className="hover:bg-gray-50">
+                      <td className="border px-3 py-2">{o.dt_entrada}</td>
 
-              <td className="border px-3 py-2">{o.item || ""}</td>
+                      <td className="border px-3 py-2">
+                        <div className="font-medium">{o.cliente_nome}</div>
+                        <div className="text-xs text-gray-600">
+                          {o.cliente_telefone ? maskPhone(o.cliente_telefone) : ""}
+                        </div>
+                      </td>
 
-              <td className="border px-3 py-2">
-                {formatBRLFromNumber(Number(o.valor) || 0)}
-              </td>
+                      <td className="border px-3 py-2">{o.item || ""}</td>
 
-              <td className="border px-3 py-2">{o.status}</td>
+                      <td className="border px-3 py-2">
+                        {formatBRLFromNumber(Number(o.valor) || 0)}
+                      </td>
 
-              <td className="border px-3 py-2">
-                <div className="flex gap-2 items-center">
-                  <button
-                    className="border px-2 py-1 rounded"
-                    onClick={() => pickOrderToEdit(o)}
-                  >
-                    Editar
-                  </button>
+                      <td className="border px-3 py-2">{o.status}</td>
 
-                  <button
-                    className="border px-2 py-1 rounded inline-flex items-center gap-1"
-                    onClick={() => openPreview(o)}
-                    title="Visualizar"
-                  >
-                    <Eye size={16} />
-                    Visualizar
-                  </button>
+                      <td className="border px-3 py-2">
+                        <div className="flex gap-2 items-center">
+                          <button
+                            className="border px-2 py-1 rounded"
+                            onClick={() => pickOrderToEdit(o)}
+                          >
+                            Editar
+                          </button>
 
-                  <button
-                    className="border px-2 py-1 rounded inline-flex items-center justify-center"
-                    onClick={() => removeOrder(o)}
-                    title="Excluir"
-                  >
-                    <Trash2 size={16} />
-                  </button>
-                </div>
-              </td>
-            </tr>
-          ))
-        )}
-      </tbody>
-    </table>
-  )}
-</div>
+                          <button
+                            className="border px-2 py-1 rounded inline-flex items-center gap-1"
+                            onClick={() => openPreview(o)}
+                            title="Visualizar"
+                          >
+                            <Eye size={16} />
+                            Visualizar
+                          </button>
 
+                          <button
+                            className="border px-2 py-1 rounded inline-flex items-center justify-center"
+                            onClick={() => removeOrder(o)}
+                            title="Excluir"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          )}
+        </div>
       </div>
 
-      {/* MODAL */}
       {previewOpen && previewOrder && (
         <PreviewModal
           tenant={tenantInfo}
@@ -1043,7 +1210,10 @@ function PreviewModal(props: {
   onPrint: () => void;
   onShare: () => void;
 }) {
-  const itens = useMemo(() => parseDescriptionToPreviewItems(props.order.descricao), [props.order.descricao]);
+  const itens = useMemo(
+    () => parseDescriptionToPreviewItems(props.order.descricao),
+    [props.order.descricao]
+  );
 
   const totalCalc = useMemo(() => {
     const t = itens.reduce((acc, it) => acc + (it.value || 0), 0);
@@ -1087,7 +1257,9 @@ function PreviewModal(props: {
         backgroundColor: "#ffffff",
       });
 
-      const fileName = `pedido-${props.order.dt_entrada || new Date().toISOString().slice(0, 10)}.png`;
+      const fileName = `pedido-${
+        props.order.dt_entrada || new Date().toISOString().slice(0, 10)
+      }.png`;
       const file = dataUrlToFile(dataUrl, fileName);
 
       const navAny = navigator as any;
@@ -1105,7 +1277,9 @@ function PreviewModal(props: {
         });
       } else {
         downloadDataUrl(dataUrl, fileName);
-        alert("Imagem gerada! Fiz o download do PNG (seu navegador não suportou compartilhar arquivo).");
+        alert(
+          "Imagem gerada! Fiz o download do PNG (seu navegador não suportou compartilhar arquivo)."
+        );
       }
     } catch (err: any) {
       console.log("[PEDIDOS] share image error:", err);
@@ -1145,7 +1319,8 @@ function PreviewModal(props: {
                     <b>Endereço:</b> {props.tenant?.endereco || ""}
                   </div>
                   <div>
-                    <b>Fone:</b> {props.tenant?.phone ? maskPhone(props.tenant.phone) : ""}
+                    <b>Fone:</b>{" "}
+                    {props.tenant?.phone ? maskPhone(props.tenant.phone) : ""}
                   </div>
                 </>
               )}
@@ -1210,7 +1385,7 @@ function PreviewModal(props: {
               </table>
             </div>
 
-           <div className="text-right font-extrabold text-xl mt-4">
+            <div className="text-right font-extrabold text-xl mt-4">
               TOTAL: {formatBRLFromNumber(totalCalc)}
             </div>
           </div>
