@@ -10,6 +10,7 @@ import {
   Share2,
   Copy,
   Image as ImageIcon,
+  Download,
 } from "lucide-react";
 import { toPng } from "html-to-image";
 
@@ -25,6 +26,7 @@ type TenantInfo = {
   ie: string | null;
   endereco: string | null;
   phone: string | null;
+  logo_url: string | null;
 };
 
 type ClientMini = {
@@ -275,6 +277,11 @@ function openPrintWindow(order: OrderRow, tenant: TenantInfo | null) {
 <body>
   <div class="box">
     <div class="muted">
+      ${
+        tenant?.logo_url
+          ? `<div style="margin-bottom:8px;"><img src="${tenant.logo_url}" alt="Logo" style="max-height:80px; max-width:260px; object-fit:contain;" /></div>`
+          : ""
+      }
       <div><b>${tenant?.name || ""}</b></div>
       <div>${tenant?.cnpj ? `<b>CNPJ:</b> ${tenant.cnpj}` : ""} ${
     tenant?.ie ? `&nbsp;&nbsp;<b>IE:</b> ${tenant.ie}` : ""
@@ -396,7 +403,8 @@ export default function PedidosPanel() {
   const [tenantLoading, setTenantLoading] = useState(false);
   const [tenantError, setTenantError] = useState<string | null>(null);
 
-  const [statusTab, setStatusTab] = useState<(typeof STATUSES)[number]>("aberto");
+  const [statusTab, setStatusTab] =
+    useState<(typeof STATUSES)[number]>("aberto");
 
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [orders, setOrders] = useState<OrderRow[]>([]);
@@ -473,7 +481,7 @@ export default function PedidosPanel() {
 
       const { data, error } = await supabase
         .from("tenants")
-        .select("id, name, cnpj, ie, endereco, phone")
+        .select("id, name, cnpj, ie, endereco, phone, logo_url")
         .eq("id", ctx.tenantId)
         .maybeSingle();
 
@@ -1045,7 +1053,9 @@ export default function PedidosPanel() {
                   ...s,
                   descricao: desc,
                   valor:
-                    total > 0 ? maskBRL(String(Math.round(total * 100))) : s.valor,
+                    total > 0
+                      ? maskBRL(String(Math.round(total * 100)))
+                      : s.valor,
                 }));
               }}
               placeholder={`Ex:
@@ -1115,7 +1125,9 @@ export default function PedidosPanel() {
                       <td className="border px-3 py-2">
                         <div className="font-medium">{o.cliente_nome}</div>
                         <div className="text-xs text-gray-600">
-                          {o.cliente_telefone ? maskPhone(o.cliente_telefone) : ""}
+                          {o.cliente_telefone
+                            ? maskPhone(o.cliente_telefone)
+                            : ""}
                         </div>
                       </td>
 
@@ -1224,6 +1236,7 @@ function PreviewModal(props: {
 
   const [shareOpen, setShareOpen] = useState(false);
   const [sharingImg, setSharingImg] = useState(false);
+  const [downloadingImg, setDownloadingImg] = useState(false);
   const shareBoxRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -1235,7 +1248,8 @@ function PreviewModal(props: {
       if (!shareOpen) return;
       const el = shareBoxRef.current;
       if (!el) return;
-      if (e.target instanceof Node && !el.contains(e.target)) setShareOpen(false);
+      if (e.target instanceof Node && !el.contains(e.target))
+        setShareOpen(false);
     };
 
     document.addEventListener("keydown", onKey);
@@ -1246,20 +1260,29 @@ function PreviewModal(props: {
     };
   }, [shareOpen]);
 
-  const shareImage = async () => {
-    if (!previewRef.current) return;
+  const buildPng = async (): Promise<{ dataUrl: string; fileName: string } | null> => {
+    if (!previewRef.current) return null;
 
+    const dataUrl = await toPng(previewRef.current, {
+      cacheBust: true,
+      pixelRatio: 2,
+      backgroundColor: "#ffffff",
+    });
+
+    const fileName = `pedido-${
+      props.order.dt_entrada || new Date().toISOString().slice(0, 10)
+    }.png`;
+
+    return { dataUrl, fileName };
+  };
+
+  const shareImage = async () => {
     setSharingImg(true);
     try {
-      const dataUrl = await toPng(previewRef.current, {
-        cacheBust: true,
-        pixelRatio: 2,
-        backgroundColor: "#ffffff",
-      });
+      const built = await buildPng();
+      if (!built) return;
 
-      const fileName = `pedido-${
-        props.order.dt_entrada || new Date().toISOString().slice(0, 10)
-      }.png`;
+      const { dataUrl, fileName } = built;
       const file = dataUrlToFile(dataUrl, fileName);
 
       const navAny = navigator as any;
@@ -1278,7 +1301,7 @@ function PreviewModal(props: {
       } else {
         downloadDataUrl(dataUrl, fileName);
         alert(
-          "Imagem gerada! Fiz o download do PNG (seu navegador não suportou compartilhar arquivo)."
+          "Seu navegador não suportou compartilhar arquivo. Fiz o download do PNG."
         );
       }
     } catch (err: any) {
@@ -1289,38 +1312,86 @@ function PreviewModal(props: {
     }
   };
 
+  const downloadImage = async () => {
+    setDownloadingImg(true);
+    try {
+      const built = await buildPng();
+      if (!built) return;
+
+      const { dataUrl, fileName } = built;
+      downloadDataUrl(dataUrl, fileName);
+    } catch (err: any) {
+      console.log("[PEDIDOS] download image error:", err);
+      alert("Não foi possível baixar a imagem. Veja o console para detalhes.");
+    } finally {
+      setDownloadingImg(false);
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
       <div className="bg-white rounded-lg w-full max-w-5xl shadow-lg overflow-hidden">
         <div className="flex items-center justify-between px-5 py-4 border-b">
           <div className="font-bold text-lg">Pré-visualização</div>
-          <button className="border rounded p-2" onClick={props.onClose} title="Fechar">
+          <button
+            className="border rounded p-2"
+            onClick={props.onClose}
+            title="Fechar"
+          >
             <X size={18} />
           </button>
         </div>
 
         <div className="p-5 overflow-auto max-h-[75vh]">
-          <div ref={previewRef} className="border-2 border-black rounded-lg p-4 bg-white">
+          <div
+            ref={previewRef}
+            className="border-2 border-black rounded-lg p-4 bg-white"
+          >
             <div className="text-sm">
               {props.tenantLoading ? (
-                <div className="text-gray-600">Carregando dados da empresa...</div>
+                <div className="text-gray-600">
+                  Carregando dados da empresa...
+                </div>
               ) : (
                 <>
-                  <div className="font-bold">{props.tenant?.name || ""}</div>
-                  <div className="flex flex-wrap gap-4">
-                    <div>
-                      <b>CNPJ:</b> {props.tenant?.cnpj || ""}
+                  {/* ✅ Cabeçalho sem caixa e com logo MAIOR à direita */}
+                  <div className="grid grid-cols-[1fr_240px] gap-4 items-start">
+                    <div className="min-w-0">
+                      <div className="font-bold text-base">
+                        {props.tenant?.name || ""}
+                      </div>
+
+                      <div className="flex flex-wrap gap-4 mt-1">
+                        <div>
+                          <b>CNPJ:</b> {props.tenant?.cnpj || ""}
+                        </div>
+                        <div>
+                          <b>IE:</b> {props.tenant?.ie || ""}
+                        </div>
+                      </div>
+
+                      <div className="mt-1">
+                        <b>Endereço:</b> {props.tenant?.endereco || ""}
+                      </div>
+
+                      <div className="mt-1">
+                        <b>Fone:</b>{" "}
+                        {props.tenant?.phone
+                          ? maskPhone(props.tenant.phone)
+                          : ""}
+                      </div>
                     </div>
-                    <div>
-                      <b>IE:</b> {props.tenant?.ie || ""}
+
+                    <div className="flex justify-end">
+                      {props.tenant?.logo_url ? (
+                        <img
+                          src={props.tenant.logo_url}
+                          alt="Logo da empresa"
+                          className="max-h-[200px] max-w-[300px] object-contain"
+                          crossOrigin="anonymous"
+                        />
+                      ) : null}
                     </div>
-                  </div>
-                  <div>
-                    <b>Endereço:</b> {props.tenant?.endereco || ""}
-                  </div>
-                  <div>
-                    <b>Fone:</b>{" "}
-                    {props.tenant?.phone ? maskPhone(props.tenant.phone) : ""}
                   </div>
                 </>
               )}
@@ -1341,14 +1412,18 @@ function PreviewModal(props: {
                 </div>
                 <div>
                   <b>Fone:</b>{" "}
-                  {props.order.cliente_telefone ? maskPhone(props.order.cliente_telefone) : ""}
+                  {props.order.cliente_telefone
+                    ? maskPhone(props.order.cliente_telefone)
+                    : ""}
                 </div>
               </div>
             </div>
 
             <div className="border-t-2 border-black my-4" />
 
-            <div className="text-center font-bold text-lg">{props.order.item || ""}</div>
+            <div className="text-center font-bold text-lg">
+              {props.order.item || ""}
+            </div>
 
             <div className="border-t-2 border-black my-4" />
 
@@ -1356,9 +1431,15 @@ function PreviewModal(props: {
               <table className="min-w-full border-2 border-black">
                 <thead>
                   <tr className="bg-gray-50">
-                    <th className="border-2 border-black px-3 py-2 w-[80px] text-left">Item</th>
-                    <th className="border-2 border-black px-3 py-2 text-left">Descrição</th>
-                    <th className="border-2 border-black px-3 py-2 w-[160px] text-right">Valor</th>
+                    <th className="border-2 border-black px-3 py-2 w-[80px] text-left">
+                      Item
+                    </th>
+                    <th className="border-2 border-black px-3 py-2 text-left">
+                      Descrição
+                    </th>
+                    <th className="border-2 border-black px-3 py-2 w-[160px] text-right">
+                      Valor
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1373,8 +1454,12 @@ function PreviewModal(props: {
                   ) : (
                     itens.map((it) => (
                       <tr key={it.n}>
-                        <td className="border-2 border-black px-3 py-2">{it.n}</td>
-                        <td className="border-2 border-black px-3 py-2">{it.desc}</td>
+                        <td className="border-2 border-black px-3 py-2">
+                          {it.n}
+                        </td>
+                        <td className="border-2 border-black px-3 py-2">
+                          {it.desc}
+                        </td>
                         <td className="border-2 border-black px-3 py-2 text-right">
                           {formatBRLFromNumber(it.value)}
                         </td>
@@ -1392,7 +1477,10 @@ function PreviewModal(props: {
         </div>
 
         <div className="px-5 py-4 border-t flex items-center justify-end gap-2">
-          <button className="border px-3 py-2 rounded inline-flex items-center gap-2" onClick={props.onPrint}>
+          <button
+            className="border px-3 py-2 rounded inline-flex items-center gap-2"
+            onClick={props.onPrint}
+          >
             <Printer size={16} />
             Imprimir
           </button>
@@ -1433,11 +1521,27 @@ function PreviewModal(props: {
                   <ImageIcon size={16} />
                   {sharingImg ? "Gerando imagem..." : "Gerar / compartilhar imagem"}
                 </button>
+
+                <button
+                  type="button"
+                  className="w-full px-3 py-2 flex items-center gap-2 hover:bg-gray-50 disabled:opacity-60"
+                  disabled={downloadingImg}
+                  onClick={async () => {
+                    setShareOpen(false);
+                    await downloadImage();
+                  }}
+                >
+                  <Download size={16} />
+                  {downloadingImg ? "Baixando..." : "Baixar imagem (PNG)"}
+                </button>
               </div>
             )}
           </div>
 
-          <button className="bg-black text-white px-3 py-2 rounded" onClick={props.onClose}>
+          <button
+            className="bg-black text-white px-3 py-2 rounded"
+            onClick={props.onClose}
+          >
             Fechar
           </button>
         </div>
