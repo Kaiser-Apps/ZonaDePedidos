@@ -1,4 +1,4 @@
-import { supabaseAdmin } from "../../../../../src/lib/supabaseAdmin";
+import { supabaseAdmin } from "../../../../src/lib/supabaseAdmin";
 
 export const runtime = "nodejs";
 
