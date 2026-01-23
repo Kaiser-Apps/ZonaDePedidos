@@ -1,124 +1,166 @@
-import { supabaseAdmin } from "../../../../../src/lib/supabaseAdmin";
+// app/api/promocode/apply/route.ts
+import { NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
 
-export const runtime = "nodejs";
+type Body = {
+  promocode?: string;
+};
 
-function getBearer(req: Request) {
-  const h = req.headers.get("authorization") || "";
-  const m = h.match(/^Bearer\s+(.+)$/i);
-  return m ? m[1] : null;
+function jsonError(message: string, status = 400, extra?: any) {
+  return NextResponse.json(
+    { ok: false, message, ...(extra ? { extra } : {}) },
+    { status }
+  );
 }
 
-function safeHost(url?: string) {
-  try {
-    if (!url) return null;
-    return new URL(url).host;
-  } catch {
-    return null;
-  }
+function normalizeCode(code: any) {
+  return String(code || "")
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, "");
 }
 
 export async function POST(req: Request) {
+  const startedAt = Date.now();
+
   try {
-    const token = getBearer(req);
-    if (!token) return Response.json({ error: "Sem token." }, { status: 401 });
+    const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-    const { data: userData, error: uErr } = await supabaseAdmin.auth.getUser(token);
-    if (uErr || !userData.user) return Response.json({ error: "Token inválido." }, { status: 401 });
+    if (!SUPABASE_URL) return jsonError("NEXT_PUBLIC_SUPABASE_URL ausente no env", 500);
+    if (!SUPABASE_SERVICE_ROLE_KEY) return jsonError("SUPABASE_SERVICE_ROLE_KEY ausente no env", 500);
 
-    const userId = userData.user.id;
+    // ✅ Cupom vitalício (família) via ENV (prioridade máxima)
+    const FAMILY_LIFETIME_COUPON = normalizeCode(process.env.FAMILY_LIFETIME_COUPON || "");
+    const FAMILY_LIFETIME_EMAILS = String(process.env.FAMILY_LIFETIME_EMAILS || "")
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean);
 
-    const body = await req.json();
-    const promocode = String(body?.promocode || "").trim().toUpperCase();
+    const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+      auth: { persistSession: false },
+    });
 
-    if (!promocode) return Response.json({ error: "promocode obrigatório." }, { status: 400 });
+    const auth = req.headers.get("authorization") || "";
+    const jwt = auth.toLowerCase().startsWith("bearer ") ? auth.slice(7).trim() : "";
+    if (!jwt) return jsonError("Authorization Bearer token ausente", 401);
 
-    console.log("[PROMO] env supabase host:", safeHost(process.env.SUPABASE_URL));
-    console.log("[PROMO] userId:", userId);
-
-    const { data: prof, error: pErr } = await supabaseAdmin
-      .from("profiles")
-      .select("tenant_id, created_at")
-      .eq("user_id", userId)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    const { count: profCount } = await supabaseAdmin
-      .from("profiles")
-      .select("user_id", { count: "exact", head: true })
-      .eq("user_id", userId);
-
-    console.log("[PROMO] profiles count for user:", profCount);
-
-    if (pErr) {
-      console.log("[PROMO] profiles query error:", pErr);
-      return Response.json({ error: "Erro ao buscar tenant no profiles." }, { status: 500 });
+    let body: Body = {};
+    try {
+      body = (await req.json()) as Body;
+    } catch {
+      body = {};
     }
 
-    if (!prof?.tenant_id) {
-      return Response.json(
-        {
-          error: "Usuário sem tenant vinculado.",
-          debug: { userId, supabaseHost: safeHost(process.env.SUPABASE_URL), profilesCount: profCount ?? null },
-        },
-        { status: 400 }
-      );
+    const code = normalizeCode(body.promocode);
+    if (!code) return jsonError("Digite um cupom.", 400);
+
+    console.log("[PROMO] apply start", { code });
+
+    // 1) resolve usuário pelo JWT
+    const { data: userResp, error: userErr } = await supabaseAdmin.auth.getUser(jwt);
+    if (userErr || !userResp?.user?.id) {
+      console.log("[PROMO] auth.getUser error:", userErr);
+      return jsonError("Token inválido ou sessão expirada", 401);
+    }
+
+    const userId = userResp.user.id;
+    const userEmail = (userResp.user.email || "").toLowerCase();
+    console.log("[PROMO] user", { userId, userEmail });
+
+    // 2) resolve tenant pelo profile
+    const { data: prof, error: profErr } = await supabaseAdmin
+      .from("profiles")
+      .select("tenant_id")
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (profErr || !prof?.tenant_id) {
+      console.log("[PROMO] profile error:", profErr);
+      return jsonError("Usuário sem tenant vinculado (profiles.tenant_id)", 400);
     }
 
     const tenantId = String(prof.tenant_id);
+    console.log("[PROMO] user -> tenant resolved", { userId, tenantId });
 
-    const nowIso = new Date().toISOString();
+    // =========================
+    // ✅ A) CUPOM VITALÍCIO (família) - não consome promo_codes
+    // =========================
+    if (FAMILY_LIFETIME_COUPON && code === FAMILY_LIFETIME_COUPON) {
+      if (FAMILY_LIFETIME_EMAILS.length > 0 && !FAMILY_LIFETIME_EMAILS.includes(userEmail)) {
+        return jsonError("Este cupom não é permitido para este e-mail.", 403);
+      }
 
-    const { data: code, error: cErr } = await supabaseAdmin
-      .from("promo_codes")
-      .select("id, promocode, datainicio, datafim, trial_days, active, max_uses, uses_count")
-      .eq("promocode", promocode)
-      .eq("active", true)
-      .lte("datainicio", nowIso)
-      .gte("datafim", nowIso)
-      .single();
+      console.log("[PROMO] applying LIFETIME coupon", { tenantId, userEmail });
 
-    if (cErr || !code) return Response.json({ error: "Cupom inválido ou fora do período." }, { status: 400 });
-    if ((code.uses_count ?? 0) >= (code.max_uses ?? 0)) return Response.json({ error: "Cupom esgotado." }, { status: 400 });
+      const { error: upErr } = await supabaseAdmin
+        .from("tenants")
+        .update({
+          subscription_status: "ACTIVE",
+          plan: "FAMILY",
+          trial_ends_at: null,
+          current_period_end: null, // vitalício
+        })
+        .eq("id", tenantId);
 
-    const { data: existing } = await supabaseAdmin
-      .from("promo_redemptions")
-      .select("id")
-      .eq("promocode_id", code.id)
-      .eq("tenant_id", tenantId)
-      .maybeSingle();
+      if (upErr) {
+        console.log("[PROMO] lifetime update error:", upErr);
+        return jsonError("Falha ao aplicar cupom vitalício", 500, {
+          code: upErr.code,
+          message: upErr.message,
+        });
+      }
 
-    if (existing?.id) return Response.json({ error: "Esse cupom já foi usado por este tenant." }, { status: 400 });
-
-    const days = Number(code.trial_days || 7);
-    const trialEndsAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
-
-    const { error: rErr } = await supabaseAdmin.from("promo_redemptions").insert({
-      promocode_id: code.id,
-      tenant_id: tenantId,
-      user_id: userId,
-    });
-
-    if (rErr) {
-      console.log("[PROMO] redemption insert error:", rErr);
-      return Response.json({ error: "Erro ao registrar uso do cupom." }, { status: 500 });
+      return NextResponse.json({
+        ok: true,
+        type: "LIFETIME",
+        tenantId,
+        subscription_status: "ACTIVE",
+        plan: "FAMILY",
+        trial_ends_at: null,
+        current_period_end: null,
+        ms: Date.now() - startedAt,
+      });
     }
 
-    await supabaseAdmin
-      .from("promo_codes")
-      .update({ uses_count: (code.uses_count ?? 0) + 1 })
-      .eq("id", code.id);
+    // =========================
+    // ✅ B) OUTROS CUPONS (tabela promo_codes)
+    // Via RPC atômico: redeem_promocode(promocode, tenant_id, user_id)
+    // =========================
+    const { data: rpcData, error: rpcErr } = await supabaseAdmin.rpc("redeem_promocode", {
+      p_promocode: code,
+      p_tenant_id: tenantId,
+      p_user_id: userId,
+    });
 
-    const { error: tErr } = await supabaseAdmin
-      .from("tenants")
-      .update({ subscription_status: "TRIAL", trial_ends_at: trialEndsAt, plan: "trial" })
-      .eq("id", tenantId);
+    if (rpcErr) {
+      console.log("[PROMO] rpc error:", rpcErr);
+      return jsonError("Erro ao validar cupom (RPC).", 500, {
+        code: rpcErr.code,
+        message: rpcErr.message,
+        details: rpcErr.details,
+        hint: rpcErr.hint,
+      });
+    }
 
-    if (tErr) return Response.json({ error: "Erro ao ativar trial no tenant." }, { status: 500 });
+    // rpcData é jsonb retornado da função
+    const ok = Boolean(rpcData?.ok);
+    if (!ok) {
+      const msg = rpcData?.message || "Cupom inválido.";
+      console.log("[PROMO] rejected", rpcData);
+      return jsonError(msg, 400, { rpc: rpcData });
+    }
 
-    return Response.json({ ok: true, trial_ends_at: trialEndsAt });
-  } catch (e: any) {
-    console.log("[PROMO] apply error:", e);
-    return Response.json({ error: e?.message || "Erro interno." }, { status: 500 });
+    console.log("[PROMO] applied", rpcData);
+
+    return NextResponse.json({
+      ...rpcData,
+      ms: Date.now() - startedAt,
+    });
+  } catch (err: any) {
+    console.log("[PROMO] unexpected error:", err);
+    return jsonError("Erro inesperado ao aplicar cupom", 500, {
+      message: String(err?.message || err),
+    });
   }
 }

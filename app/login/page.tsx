@@ -1,61 +1,96 @@
 "use client";
 
 import { useState } from "react";
-import { supabase } from "../../src/lib/supabaseClient";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
+import { supabase } from "../../src/lib/supabaseClient";
 
 export default function LoginPage() {
   const router = useRouter();
 
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [senha, setSenha] = useState("");
+  const [busy, setBusy] = useState(false);
 
-  const login = async () => {
-    setLoading(true);
+  const onLogin = async () => {
+    const e = email.trim().toLowerCase();
+    if (!e || !senha) {
+      alert("Informe e-mail e senha.");
+      return;
+    }
 
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+    setBusy(true);
+    try {
+      console.log("[LOGIN] signInWithPassword", { email: e });
 
-    setLoading(false);
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: e,
+        password: senha,
+      });
 
-    if (error) {
-      alert(error.message);
-    } else {
-      router.push("/");
+      if (error) {
+        console.log("[LOGIN] error:", error);
+        alert(error.message);
+        return;
+      }
+
+      console.log("[LOGIN] ok session:", Boolean(data.session));
+      router.replace("/");
+    } finally {
+      setBusy(false);
     }
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center">
-      <div className="border p-6 rounded w-80">
-        <h1 className="text-xl font-bold mb-4">Login</h1>
+    <div className="min-h-screen bg-[#F3F7F4] flex items-center justify-center p-4">
+      <div className="w-full max-w-md bg-white border rounded-2xl shadow-sm p-6">
+        <div className="flex items-center gap-3">
+          <div className="h-10 w-10 rounded-2xl bg-gradient-to-br from-emerald-600 to-green-500 flex items-center justify-center shadow-sm">
+            <span className="text-white font-extrabold">Z</span>
+          </div>
+          <div>
+            <div className="text-lg font-extrabold">Zona de Pedidos</div>
+            <div className="text-xs text-slate-500">Acesse sua conta</div>
+          </div>
+        </div>
 
-        <input
-          type="email"
-          placeholder="Email"
-          className="border w-full p-2 mb-2"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-        />
+        <div className="mt-6 space-y-3">
+          <div>
+            <div className="text-xs text-slate-600 mb-1">E-mail</div>
+            <input
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="seuemail@exemplo.com"
+              className="w-full border rounded-xl px-3 py-2 text-sm"
+            />
+          </div>
 
-        <input
-          type="password"
-          placeholder="Senha"
-          className="border w-full p-2 mb-4"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-        />
+          <div>
+            <div className="text-xs text-slate-600 mb-1">Senha</div>
+            <input
+              value={senha}
+              onChange={(e) => setSenha(e.target.value)}
+              placeholder="••••••••"
+              type="password"
+              className="w-full border rounded-xl px-3 py-2 text-sm"
+            />
+          </div>
 
-        <button
-          onClick={login}
-          disabled={loading}
-          className="bg-black text-white w-full p-2 rounded"
-        >
-          {loading ? "Entrando..." : "Entrar"}
-        </button>
+          <button
+            onClick={onLogin}
+            disabled={busy}
+            className="w-full bg-black text-white px-5 py-2 rounded-xl text-sm font-semibold disabled:opacity-60"
+          >
+            {busy ? "Entrando..." : "Entrar"}
+          </button>
+
+          <div className="text-xs text-slate-600 text-center">
+            Ainda não tem conta?{" "}
+            <Link href="/cadastro" className="font-bold underline">
+              Criar conta
+            </Link>
+          </div>
+        </div>
       </div>
     </div>
   );

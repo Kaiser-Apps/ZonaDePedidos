@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
+import { useRouter } from "next/navigation";
 
 type TenantBilling = {
   id: string;
@@ -26,6 +27,8 @@ function trialValid(trialEndsAt: string | null) {
 }
 
 export default function BillingPanel() {
+  const router = useRouter();
+
   const [loading, setLoading] = useState(true);
   const [tenantId, setTenantId] = useState<string | null>(null);
 
@@ -41,6 +44,12 @@ export default function BillingPanel() {
   );
 
   const isActive = useMemo(() => status === "ACTIVE", [status]);
+
+  // ✅ Vitalícia: ACTIVE e sem vencimento
+  const isLifetime = useMemo(() => {
+    return isActive && !tenant?.current_period_end;
+  }, [isActive, tenant]);
+
   const isTrial = useMemo(
     () => status === "TRIAL" && trialValid(tenant?.trial_ends_at || null),
     [status, tenant]
@@ -114,6 +123,19 @@ export default function BillingPanel() {
     };
   }, []);
 
+  const handleBack = () => {
+    // Volta para a tela anterior se existir histórico; senão vai para /pedidos
+    try {
+      if (typeof window !== "undefined" && window.history.length > 1) {
+        router.back();
+        return;
+      }
+    } catch (e) {
+      console.log("[BILLING] handleBack fallback error:", e);
+    }
+    router.push("/pedidos");
+  };
+
   const openCheckout = async () => {
     if (!tenantId) return;
     setBusy(true);
@@ -123,19 +145,25 @@ export default function BillingPanel() {
 
       const res = await fetch("/api/asaas/create-recurring-link", {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ tenantId }),
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({}),
       });
 
-      const json = await res.json();
+      const json = await res.json().catch(() => ({} as any));
 
       if (!res.ok) {
         console.log("[BILLING] create link error:", json);
-        alert(json?.error || "Erro ao iniciar assinatura.");
+        const msg = json?.message || json?.error || "Erro ao iniciar assinatura.";
+        if (json?.extra) console.log("[BILLING] extra:", json.extra);
+        alert(msg);
         return;
       }
 
       if (!json?.url) {
+        console.log("[BILLING] missing url:", json);
         alert("Asaas não retornou URL do checkout.");
         return;
       }
@@ -162,19 +190,29 @@ export default function BillingPanel() {
 
       const res = await fetch("/api/promocode/apply", {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({ tenantId, promocode: code }),
       });
 
-      const json = await res.json();
+      const json = await res.json().catch(() => ({} as any));
 
       if (!res.ok) {
         console.log("[BILLING] apply promo error:", json);
-        alert(json?.error || "Cupom inválido.");
+        alert(json?.error || json?.message || "Cupom inválido.");
         return;
       }
 
-      alert(`Cupom aplicado! Trial até: ${fmtDateBR(json?.trial_ends_at || null)}`);
+      if (json?.type === "LIFETIME") {
+        alert("Cupom vitalício aplicado! ✅");
+      } else {
+        alert(
+          `Cupom aplicado! Trial até: ${fmtDateBR(json?.trial_ends_at || null)}`
+        );
+      }
+
       await loadTenantBilling(tenantId);
       setPromo("");
     } finally {
@@ -194,12 +232,21 @@ export default function BillingPanel() {
           </div>
         </div>
 
-        <button
-          className="border px-3 py-2 rounded-xl text-sm font-semibold bg-white hover:bg-slate-50"
-          onClick={() => tenantId && loadTenantBilling(tenantId)}
-        >
-          Atualizar status
-        </button>
+        <div className="flex gap-2 flex-wrap">
+          <button
+            className="border px-3 py-2 rounded-xl text-sm font-semibold bg-white hover:bg-slate-50"
+            onClick={handleBack}
+          >
+            ← Voltar
+          </button>
+
+          <button
+            className="border px-3 py-2 rounded-xl text-sm font-semibold bg-white hover:bg-slate-50"
+            onClick={() => tenantId && loadTenantBilling(tenantId)}
+          >
+            Atualizar status
+          </button>
+        </div>
       </div>
 
       <div className="mt-4 p-4 rounded-xl border bg-slate-50">
@@ -216,19 +263,33 @@ export default function BillingPanel() {
 
           <div>
             <div className="text-xs text-slate-600">Trial até</div>
-            <div className="font-semibold">{fmtDateBR(tenant?.trial_ends_at || null)}</div>
+            <div className="font-semibold">
+              {fmtDateBR(tenant?.trial_ends_at || null)}
+            </div>
           </div>
 
           <div>
             <div className="text-xs text-slate-600">Próximo vencimento</div>
-            <div className="font-semibold">{fmtDateBR(tenant?.current_period_end || null)}</div>
+            <div className="font-semibold">
+              {isLifetime
+                ? "Vitalícia"
+                : fmtDateBR(tenant?.current_period_end || null)}
+            </div>
           </div>
         </div>
 
-        {isActive ? (
-          <div className="mt-3 text-sm text-emerald-700 font-semibold">Assinatura ativa ✅</div>
+        {isLifetime ? (
+          <div className="mt-3 text-sm text-emerald-700 font-semibold">
+            Assinatura vitalícia ✅
+          </div>
+        ) : isActive ? (
+          <div className="mt-3 text-sm text-emerald-700 font-semibold">
+            Assinatura ativa ✅
+          </div>
         ) : isTrial ? (
-          <div className="mt-3 text-sm text-sky-700 font-semibold">Trial ativo ✅</div>
+          <div className="mt-3 text-sm text-sky-700 font-semibold">
+            Trial ativo ✅
+          </div>
         ) : (
           <div className="mt-3 text-sm text-amber-800">
             Assinatura inativa. Assine para liberar o acesso.
@@ -238,13 +299,13 @@ export default function BillingPanel() {
 
       {/* PROMOCODE */}
       <div className="mt-6">
-        <div className="text-sm font-bold">Cupom de Trial</div>
+        <div className="text-sm font-bold">Cupom</div>
         <div className="mt-2 flex flex-wrap gap-2">
           <input
             value={promo}
             onChange={(e) => setPromo(e.target.value)}
-            placeholder="Ex: PROMO7"
-            className="border rounded-xl px-3 py-2 text-sm w-56"
+            placeholder="Ex: PROMO7 ou CUPOMFAMILIA"
+            className="border rounded-xl px-3 py-2 text-sm w-full sm:w-56"
           />
           <button
             onClick={applyPromo}
@@ -255,7 +316,7 @@ export default function BillingPanel() {
           </button>
         </div>
         <div className="mt-2 text-xs text-slate-500">
-          O cupom ativa o status <b>TRIAL</b> até a data calculada.
+          O cupom pode ativar <b>TRIAL</b> ou <b>VITALÍCIO</b> (família).
         </div>
       </div>
 
@@ -263,10 +324,11 @@ export default function BillingPanel() {
       <div className="mt-6 flex flex-wrap gap-2">
         <button
           onClick={openCheckout}
-          disabled={busy}
-          className="bg-black text-white px-5 py-2 rounded-xl text-sm font-semibold"
+          disabled={busy || isLifetime}
+          className="bg-black text-white px-5 py-2 rounded-xl text-sm font-semibold disabled:opacity-60 w-full sm:w-auto"
+          title={isLifetime ? "Assinatura vitalícia não precisa checkout" : ""}
         >
-          {busy ? "Abrindo..." : "Assinar agora (Asaas)"}
+          {busy ? "Abrindo..." : isLifetime ? "Vitalícia ativa" : "Assinar agora (Asaas)"}
         </button>
       </div>
 

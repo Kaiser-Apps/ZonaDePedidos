@@ -46,9 +46,7 @@ function maskPhone(value: string) {
     return v.replace(
       /(\d{2})(\d{0,4})(\d{0,4})/,
       (_, ddd, p1, p2) =>
-        `${ddd ? "(" + ddd + ")" : ""}${p1 ? " " + p1 : ""}${
-          p2 ? "-" + p2 : ""
-        }`
+        `${ddd ? "(" + ddd + ")" : ""}${p1 ? " " + p1 : ""}${p2 ? "-" + p2 : ""}`
     );
   }
 
@@ -61,9 +59,7 @@ function maskCNPJ(value: string) {
   return v.replace(
     /(\d{2})(\d{3})(\d{3})(\d{4})(\d{0,2})/,
     (_, a, b, c, d, e) =>
-      `${a}${b ? "." + b : ""}${c ? "." + c : ""}${
-        d ? "/" + d : ""
-      }${e ? "-" + e : ""}`
+      `${a}${b ? "." + b : ""}${c ? "." + c : ""}${d ? "/" + d : ""}${e ? "-" + e : ""}`
   );
 }
 
@@ -74,6 +70,63 @@ const emptyForm: TenantForm = {
   endereco: "",
   phone: "",
 };
+
+/* =======================
+   UI HELPERS
+======================= */
+
+function Section(props: {
+  title: string;
+  subtitle?: string;
+  right?: React.ReactNode;
+  children: React.ReactNode;
+  /** remove o fundo "grade/cinza" */
+  clean?: boolean;
+}) {
+  return (
+    <div
+      className={[
+        "border rounded-2xl p-4 md:p-5",
+        props.clean ? "bg-white" : "bg-slate-50",
+      ].join(" ")}
+    >
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <div className="text-sm font-extrabold">{props.title}</div>
+          {props.subtitle ? (
+            <div className="text-xs text-slate-600 mt-1">{props.subtitle}</div>
+          ) : null}
+        </div>
+        {props.right ? <div className="shrink-0 w-full sm:w-auto">{props.right}</div> : null}
+      </div>
+
+      <div className="mt-4">{props.children}</div>
+    </div>
+  );
+}
+
+function Field(props: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  hint?: string;
+}) {
+  return (
+    <label className="block">
+      <div className="text-sm font-semibold mb-1">{props.label}</div>
+      <input
+        className="w-full border rounded-xl px-3 py-2 bg-white"
+        value={props.value}
+        onChange={(e) => props.onChange(e.target.value)}
+        placeholder={props.placeholder}
+      />
+      {props.hint ? (
+        <div className="text-xs text-slate-500 mt-1">{props.hint}</div>
+      ) : null}
+    </label>
+  );
+}
 
 /* =======================
    COMPONENT
@@ -96,9 +149,20 @@ export default function TenantSettingsPanel() {
   const [logoUploading, setLogoUploading] = useState(false);
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
 
-  const canSave = useMemo(() => {
-    return form.name.trim().length > 0;
-  }, [form.name]);
+  const canSave = useMemo(() => form.name.trim().length > 0, [form.name]);
+
+  const handleBack = () => {
+    // Volta para a tela anterior se existir histórico; senão vai para /pedidos
+    try {
+      if (typeof window !== "undefined" && window.history.length > 1) {
+        router.back();
+        return;
+      }
+    } catch (e) {
+      console.log("[TENANT_SETTINGS] handleBack fallback error:", e);
+    }
+    router.push("/pedidos");
+  };
 
   /* =======================
      1) LOAD CONTEXT (USER + TENANT)
@@ -142,7 +206,7 @@ export default function TenantSettingsPanel() {
 
       if (alive) {
         setCtx({
-          tenantId: profile.tenant_id,
+          tenantId: String(profile.tenant_id),
           userId,
         });
         setCtxLoading(false);
@@ -237,10 +301,7 @@ export default function TenantSettingsPanel() {
       }
 
       // url pública (bucket é public)
-      const { data: pub } = supabase.storage
-        .from("tenant-logos")
-        .getPublicUrl(path);
-
+      const { data: pub } = supabase.storage.from("tenant-logos").getPublicUrl(path);
       const publicUrl = pub?.publicUrl || null;
 
       if (!publicUrl) {
@@ -322,10 +383,7 @@ export default function TenantSettingsPanel() {
       phone: form.phone ? onlyDigits(form.phone) : null,
     };
 
-    const { error } = await supabase
-      .from("tenants")
-      .update(payload)
-      .eq("id", ctx.tenantId);
+    const { error } = await supabase.from("tenants").update(payload).eq("id", ctx.tenantId);
 
     setSaving(false);
 
@@ -335,76 +393,96 @@ export default function TenantSettingsPanel() {
       return;
     }
 
-    alert("Dados do tenant atualizados com sucesso!");
+    alert("Dados da empresa atualizados com sucesso!");
   };
 
   /* =======================
      RENDER
   ======================= */
 
+  // ✅ IMPORTANTE: NÃO colocar "bg-white border rounded-2xl" aqui
+  // porque o layout.tsx já coloca o card branco do mesmo tamanho do print.
+
   if (ctxLoading) {
-    return <div className="p-4">Carregando contexto...</div>;
+    return (
+      <div className="space-y-4">
+        <Section
+          title="Configurações"
+          subtitle="Carregando contexto..."
+          clean
+        >
+          <div className="text-sm text-slate-600">Aguarde…</div>
+        </Section>
+      </div>
+    );
   }
 
   if (!ctx) {
     return (
-      <div className="p-4 border rounded bg-white">
-        Não foi possível carregar o tenant do usuário.
+      <div className="space-y-4">
+        <Section title="Configurações" subtitle="Falha ao carregar tenant" clean>
+          <div className="text-sm text-red-600">
+            Não foi possível carregar o tenant do usuário.
+          </div>
+        </Section>
       </div>
     );
   }
 
   return (
-    <div className="bg-white border rounded p-4">
-      {/* HEADER */}
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => router.back()}
-            className="border px-3 py-2 rounded hover:bg-gray-50 text-sm"
-          >
-            ← Voltar
-          </button>
+    <div className="space-y-4">
+      {/* HEADER DO CONTEÚDO (igual vibe do print) */}
+      <Section
+        title="Configurações da Empresa"
+        subtitle="Atualize seus dados e a logo que aparece na pré-visualização e impressão."
+        clean
+        right={
+          <div className="flex gap-2 flex-wrap w-full sm:w-auto">
+            <button
+              onClick={handleBack}
+              className="border px-4 py-2 rounded-xl text-sm font-semibold bg-white hover:bg-slate-50 w-full sm:w-auto"
+              type="button"
+            >
+              ← Voltar
+            </button>
 
-          <div>
-            <div className="text-lg font-bold">Configurações da Empresa</div>
+            <button
+              onClick={save}
+              disabled={saving || !canSave}
+              className={[
+                "px-5 py-2 rounded-xl text-sm font-semibold w-full sm:w-auto",
+                saving || !canSave
+                  ? "bg-black/60 text-white cursor-not-allowed"
+                  : "bg-black text-white hover:opacity-95",
+              ].join(" ")}
+              type="button"
+            >
+              {saving ? "Salvando..." : "Salvar"}
+            </button>
           </div>
-        </div>
-
-        <button
-          onClick={save}
-          disabled={saving || !canSave}
-          className={`border px-4 py-2 rounded ${
-            saving || !canSave
-              ? "opacity-60 cursor-not-allowed"
-              : "hover:bg-gray-50"
-          }`}
-        >
-          {saving ? "Salvando..." : "Salvar"}
-        </button>
-      </div>
-
-      {/* STATUS */}
-      {tenantLoading && (
-        <div className="mt-4 text-sm">Carregando dados do tenant...</div>
-      )}
-
-      {tenantError && (
-        <div className="mt-4 text-sm text-red-600">Erro: {tenantError}</div>
-      )}
+        }
+      >
+        {tenantLoading ? (
+          <div className="text-xs text-slate-500">Carregando dados...</div>
+        ) : null}
+        {tenantError ? (
+          <div className="text-xs text-red-600">Erro: {tenantError}</div>
+        ) : null}
+        {tenant ? (
+          <div className="text-xs text-slate-500">
+            Cliente: <b>{tenant.name}</b>
+          </div>
+        ) : null}
+      </Section>
 
       {/* LOGO */}
-      <div className="mt-4 border rounded p-4">
-        <div className="flex items-center justify-between gap-3 flex-wrap">
-          <div>
-            <div className="font-semibold">Logo da empresa</div>
-            <div className="text-xs text-slate-500">
-              Envie PNG/JPG. Essa logo aparece na pré-visualização e na impressão do pedido.
-            </div>
-          </div>
-
-          <div className="flex gap-2 items-center">
-            <label className="border px-3 py-2 rounded cursor-pointer hover:bg-gray-50 text-sm">
+      <Section
+        clean
+        title="Logo da empresa"
+        subtitle="Envie PNG/JPG/JPEG/WEBP. Essa logo aparece na pré-visualização e na impressão do pedido."
+        right={
+          <div className="flex gap-2 items-center flex-wrap w-full sm:w-auto">
+            <label className="border px-4 py-2 rounded-xl cursor-pointer hover:bg-slate-50 text-sm font-semibold bg-white w-full sm:w-auto text-center">
               {logoUploading ? "Enviando..." : "Enviar logo"}
               <input
                 type="file"
@@ -420,7 +498,7 @@ export default function TenantSettingsPanel() {
             </label>
 
             <button
-              className="border px-3 py-2 rounded text-sm hover:bg-gray-50 disabled:opacity-60"
+              className="border px-4 py-2 rounded-xl text-sm font-semibold bg-white hover:bg-slate-50 disabled:opacity-60 w-full sm:w-auto"
               onClick={removeLogo}
               disabled={logoUploading || !logoUrl}
               type="button"
@@ -428,73 +506,74 @@ export default function TenantSettingsPanel() {
               Remover
             </button>
           </div>
-        </div>
-
+        }
+      >
         {logoUrl ? (
-          <div className="mt-3 flex items-center gap-3">
-            <img
-              src={logoUrl}
-              alt="Logo"
-              className="h-16 w-16 rounded border object-contain bg-white"
-            />
+          <div className="space-y-3">
+            <div className="w-full overflow-hidden">
+              <img
+                src={logoUrl}
+                alt="Logo"
+                className="w-full h-44 md:h-56 object-contain"
+              />
+            </div>
+
             <div className="text-xs text-slate-500 break-all">{logoUrl}</div>
           </div>
         ) : (
-          <div className="mt-3 text-sm text-slate-600">
-            Nenhuma logo cadastrada.
-          </div>
+          <div className="text-sm text-slate-700">Nenhuma logo cadastrada.</div>
         )}
-      </div>
+      </Section>
 
-      {/* FORM */}
-      <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
-        <div>
-          <label className="text-sm font-semibold">Nome</label>
-          <input
-            className="w-full border rounded px-3 py-2"
+      {/* DADOS */}
+      <Section
+        title="Dados da empresa"
+        subtitle="Essas informações aparecem nos pedidos e na impressão."
+      >
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <Field
+            label="Nome *"
             value={form.name}
-            onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
+            onChange={(v) => setForm((p) => ({ ...p, name: v }))}
+            placeholder="Ex: Mecânica do Polaco"
           />
-        </div>
 
-        <div>
-          <label className="text-sm font-semibold">CNPJ</label>
-          <input
-            className="w-full border rounded px-3 py-2"
+          <Field
+            label="CNPJ"
             value={maskCNPJ(form.cnpj)}
-            onChange={(e) => setForm((p) => ({ ...p, cnpj: e.target.value }))}
+            onChange={(v) => setForm((p) => ({ ...p, cnpj: v }))}
+            placeholder="00.000.000/0000-00"
           />
-        </div>
 
-        <div>
-          <label className="text-sm font-semibold">IE</label>
-          <input
-            className="w-full border rounded px-3 py-2"
+          <Field
+            label="IE"
             value={form.ie}
-            onChange={(e) => setForm((p) => ({ ...p, ie: e.target.value }))}
+            onChange={(v) => setForm((p) => ({ ...p, ie: v }))}
+            placeholder="Inscrição estadual"
           />
-        </div>
 
-        <div>
-          <label className="text-sm font-semibold">Telefone</label>
-          <input
-            className="w-full border rounded px-3 py-2"
+          <Field
+            label="Telefone"
             value={maskPhone(form.phone)}
-            onChange={(e) => setForm((p) => ({ ...p, phone: e.target.value }))}
+            onChange={(v) => setForm((p) => ({ ...p, phone: v }))}
+            placeholder="(11) 99999-9999"
+            hint="O sistema salva somente números no banco."
           />
+
+          <div className="md:col-span-2">
+            <Field
+              label="Endereço"
+              value={form.endereco}
+              onChange={(v) => setForm((p) => ({ ...p, endereco: v }))}
+              placeholder="Rua, número, bairro, cidade - UF"
+            />
+          </div>
         </div>
 
-        <div className="md:col-span-2">
-          <label className="text-sm font-semibold">Endereço</label>
-          <input
-            className="w-full border rounded px-3 py-2"
-            value={form.endereco}
-            onChange={(e) =>
-              setForm((p) => ({ ...p, endereco: e.target.value }))
-            }
-          />
+        <div className="mt-4 text-xs text-slate-500">
+          Dica: clique em <b>Salvar</b> no topo para aplicar as alterações.
         </div>
-      </div>
+      </Section>
     </div>
   );
 }
