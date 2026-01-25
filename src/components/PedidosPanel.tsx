@@ -179,6 +179,9 @@ function calcDiscount(subtotal: number, type: DiscountType, valueInput: string) 
   }
 
   if (type === "percent") {
+    // aqui o valueInput vem como "10" (não moeda) se o usuário digitar "10"
+    // então vamos interpretar como percentual direto.
+    // Se digitarem "10,5" funciona também.
     const pct = clamp(
       Number(String(valueInput || "").replace(".", "").replace(",", ".")) || 0,
       0,
@@ -188,6 +191,7 @@ function calcDiscount(subtotal: number, type: DiscountType, valueInput: string) 
     return { discount, total: subtotal - discount };
   }
 
+  // amount: valueInput é BRL, então v já é R$ correto
   const discount = clamp(v, 0, subtotal);
   return { discount, total: subtotal - discount };
 }
@@ -288,11 +292,7 @@ function buildShareText(order: OrderRow, tenant: TenantInfo | null) {
       ? String(order.desconto_valor ?? 0)
       : maskBRL(String(Math.round(Number(order.desconto_valor || 0) * 100)));
 
-  const { discount, total } = calcDiscount(
-    subtotal,
-    discountType,
-    discountValueStr
-  );
+  const { discount, total } = calcDiscount(subtotal, discountType, discountValueStr);
 
   const totalFinal = Number(order.valor || 0) || total;
 
@@ -711,8 +711,7 @@ export default function PedidosPanel() {
   };
 
   const pickOrderToEdit = (o: OrderRow) => {
-    const bruto =
-      o.valor_bruto != null ? Number(o.valor_bruto) : Number(o.valor || 0);
+    const bruto = o.valor_bruto != null ? Number(o.valor_bruto) : Number(o.valor || 0);
     const valorMasked = maskBRL(String(Math.round((bruto || 0) * 100)));
 
     const descontoTipo: DiscountType =
@@ -843,15 +842,21 @@ export default function PedidosPanel() {
   }): Promise<{ clientId: string; telefoneNorm: string | null }> => {
     const current = (args.currentClientId || "").trim();
     if (current) {
-      const telNorm = args.cliente_telefone ? onlyDigits(args.cliente_telefone) : "";
+      const telNorm = args.cliente_telefone
+        ? onlyDigits(args.cliente_telefone)
+        : "";
       return { clientId: current, telefoneNorm: telNorm || null };
     }
 
     const nome = (args.cliente_nome || "").trim();
-    const telefoneNorm = args.cliente_telefone ? onlyDigits(args.cliente_telefone) : "";
+    const telefoneNorm = args.cliente_telefone
+      ? onlyDigits(args.cliente_telefone)
+      : "";
 
     if (!telefoneNorm) {
-      throw new Error("Para cadastrar um cliente novo, informe o telefone do cliente.");
+      throw new Error(
+        "Para cadastrar um cliente novo, informe o telefone do cliente."
+      );
     }
 
     const { data: found, error: findErr } = await supabase
@@ -924,7 +929,12 @@ export default function PedidosPanel() {
     const valorBruto = parseBRLToNumber(form.valor);
     if (valorBruto <= 0) return alert("Preencha um valor maior que zero.");
 
-    const { total } = calcDiscount(valorBruto, form.desconto_tipo, form.desconto_valor);
+    // ✅ calcula desconto e total final
+    const { discount, total } = calcDiscount(
+      valorBruto,
+      form.desconto_tipo,
+      form.desconto_valor
+    );
 
     const descontoTipoDb =
       form.desconto_tipo === "percent"
@@ -985,6 +995,7 @@ export default function PedidosPanel() {
         item: form.item ? form.item.trim() : null,
         descricao: form.descricao ? form.descricao.trim() : null,
 
+        // ✅ salva bruto + desconto + final
         valor_bruto: valorBruto,
         desconto_tipo: descontoTipoDb,
         desconto_valor: descontoValorDb,
@@ -1075,13 +1086,14 @@ export default function PedidosPanel() {
   return (
     <div className="space-y-4">
       <div className="border rounded p-4">
-        {/* MOBILE: header empilha, botões full */}
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-          <div className="min-w-0">
+        <div className="flex items-center justify-between gap-3">
+          <div>
             <div className="font-bold text-lg">
               {isEdit ? "Editar Pedido" : "Novo Pedido"}
             </div>
-            <div className="text-sm text-gray-600">Status atual: {form.status}</div>
+            <div className="text-sm text-gray-600">
+              Status atual: {form.status}
+            </div>
             {tenantError && (
               <div className="text-xs text-red-600 mt-1">
                 Tenant não carregou: {tenantError}
@@ -1089,10 +1101,10 @@ export default function PedidosPanel() {
             )}
           </div>
 
-          <div className="flex flex-col sm:flex-row gap-2 sm:justify-end">
+          <div className="flex gap-2">
             {isEdit && (
               <button
-                className="border px-3 py-2 rounded w-full sm:w-auto"
+                className="border px-3 py-2 rounded"
                 onClick={resetForm}
                 disabled={saving}
               >
@@ -1101,7 +1113,7 @@ export default function PedidosPanel() {
             )}
 
             <button
-              className="bg-black text-white px-3 py-2 rounded w-full sm:w-auto"
+              className="bg-black text-white px-3 py-2 rounded"
               onClick={save}
               disabled={saving}
             >
@@ -1130,7 +1142,9 @@ export default function PedidosPanel() {
             <select
               className="border rounded px-3 py-2 w-full"
               value={form.status}
-              onChange={(e) => setForm((s) => ({ ...s, status: e.target.value }))}
+              onChange={(e) =>
+                setForm((s) => ({ ...s, status: e.target.value }))
+              }
             >
               {STATUSES.map((s) => (
                 <option key={s} value={s}>
@@ -1151,32 +1165,33 @@ export default function PedidosPanel() {
               onBlur={() => setTimeout(() => setShowClientDropdown(false), 150)}
             />
 
-            {showClientDropdown && (clientLoading || clientOptions.length > 0) && (
-              <div className="absolute z-10 mt-1 w-full border bg-white rounded shadow max-h-64 overflow-auto">
-                {clientLoading ? (
-                  <div className="p-3 text-sm text-gray-600">Buscando...</div>
-                ) : clientOptions.length === 0 ? (
-                  <div className="p-3 text-sm text-gray-600">
-                    Nenhum cliente encontrado.
-                  </div>
-                ) : (
-                  clientOptions.map((c) => (
-                    <button
-                      key={c.id}
-                      type="button"
-                      className="w-full text-left px-3 py-2 hover:bg-gray-50"
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => pickClient(c)}
-                    >
-                      <div className="font-medium">{c.nome}</div>
-                      <div className="text-xs text-gray-600">
-                        {maskPhone(c.telefone || "")}
-                      </div>
-                    </button>
-                  ))
-                )}
-              </div>
-            )}
+            {showClientDropdown &&
+              (clientLoading || clientOptions.length > 0) && (
+                <div className="absolute z-10 mt-1 w-full border bg-white rounded shadow">
+                  {clientLoading ? (
+                    <div className="p-3 text-sm text-gray-600">Buscando...</div>
+                  ) : clientOptions.length === 0 ? (
+                    <div className="p-3 text-sm text-gray-600">
+                      Nenhum cliente encontrado.
+                    </div>
+                  ) : (
+                    clientOptions.map((c) => (
+                      <button
+                        key={c.id}
+                        type="button"
+                        className="w-full text-left px-3 py-2 hover:bg-gray-50"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => pickClient(c)}
+                      >
+                        <div className="font-medium">{c.nome}</div>
+                        <div className="text-xs text-gray-600">
+                          {maskPhone(c.telefone || "")}
+                        </div>
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
           </div>
 
           <Field
@@ -1240,6 +1255,7 @@ export default function PedidosPanel() {
                 const v = e.target.value;
 
                 if (form.desconto_tipo === "percent") {
+                  // permite "10" ou "10,5"
                   const cleaned = v
                     .replace(/[^\d,]/g, "")
                     .replace(/(,.*),/g, "$1");
@@ -1266,11 +1282,12 @@ export default function PedidosPanel() {
           {/* ✅ RESUMO */}
           <div className="md:col-span-3">
             <div className="border rounded p-3 bg-slate-50 text-sm">
-              {/* MOBILE: quebra em colunas */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-6">
+              <div className="flex flex-wrap gap-6">
                 <div>
                   <div className="text-xs text-slate-600">Subtotal</div>
-                  <div className="font-semibold">{formatBRLFromNumber(brutoUI)}</div>
+                  <div className="font-semibold">
+                    {formatBRLFromNumber(brutoUI)}
+                  </div>
                 </div>
 
                 <div>
@@ -1292,8 +1309,8 @@ export default function PedidosPanel() {
               </div>
 
               <div className="text-xs text-slate-500 mt-2">
-                Observação: o total final será salvo em <b>valor</b> e o subtotal em{" "}
-                <b>valor_bruto</b>.
+                Observação: o total final será salvo em <b>valor</b> e o subtotal
+                em <b>valor_bruto</b>.
               </div>
             </div>
           </div>
@@ -1312,7 +1329,10 @@ export default function PedidosPanel() {
                 setForm((s) => ({
                   ...s,
                   descricao: desc,
-                  valor: total > 0 ? maskBRL(String(Math.round(total * 100))) : s.valor,
+                  valor:
+                    total > 0
+                      ? maskBRL(String(Math.round(total * 100)))
+                      : s.valor,
                 }));
               }}
               placeholder={`Ex:
@@ -1325,210 +1345,117 @@ export default function PedidosPanel() {
       </div>
 
       <div className="border rounded p-4">
-        {/* MOBILE: tabs com scroll horizontal */}
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap gap-2 items-center">
           {statusCountsLoading && (
-            <div className="text-xs text-gray-500 mr-2 whitespace-nowrap">
+            <div className="text-xs text-gray-500 mr-2">
               Atualizando status...
             </div>
           )}
 
-          <div className="flex gap-2 overflow-x-auto whitespace-nowrap -mx-1 px-1 pb-1 w-full">
-            {visibleStatuses.map((s) => {
-              const count = statusCounts[s] || 0;
-              const label = `${s} (${count})`;
+          {visibleStatuses.map((s) => {
+            const count = statusCounts[s] || 0;
+            const label = `${s} (${count})`;
 
-              return (
-                <button
-                  key={s}
-                  onClick={() => setStatusTab(s)}
-                  className={`px-3 py-2 rounded border shrink-0 ${
-                    statusTab === s ? "bg-black text-white" : ""
-                  }`}
-                  title={label}
-                >
-                  {label}
-                </button>
-              );
-            })}
-          </div>
+            return (
+              <button
+                key={s}
+                onClick={() => setStatusTab(s)}
+                className={`px-3 py-2 rounded border ${
+                  statusTab === s ? "bg-black text-white" : ""
+                }`}
+                title={label}
+              >
+                {label}
+              </button>
+            );
+          })}
         </div>
 
-        <div className="mt-4">
+        <div className="mt-4 overflow-auto">
           {ordersLoading ? (
             <div className="text-gray-600">Carregando pedidos...</div>
           ) : (
-            <>
-              {/* DESKTOP/TABLET */}
-              <div className="hidden md:block overflow-auto">
-                <table className="min-w-full border">
-                  <thead>
-                    <tr className="bg-gray-50 text-left">
-                      <th className="border px-3 py-2">Entrada</th>
-                      <th className="border px-3 py-2">Cliente</th>
-                      <th className="border px-3 py-2">Item</th>
-                      <th className="border px-3 py-2">Total</th>
-                      <th className="border px-3 py-2">Status</th>
-                      <th className="border px-3 py-2">Ações</th>
-                    </tr>
-                  </thead>
+            <table className="min-w-full border">
+              <thead>
+                <tr className="bg-gray-50 text-left">
+                  <th className="border px-3 py-2">Entrada</th>
+                  <th className="border px-3 py-2">Cliente</th>
+                  <th className="border px-3 py-2">Item</th>
+                  <th className="border px-3 py-2">Total</th>
+                  <th className="border px-3 py-2">Status</th>
+                  <th className="border px-3 py-2">Ações</th>
+                </tr>
+              </thead>
 
-                  <tbody>
-                    {orders.length === 0 ? (
-                      <tr>
-                        <td colSpan={6} className="border px-3 py-3 text-gray-600">
-                          Nenhum pedido neste status.
-                        </td>
-                      </tr>
-                    ) : (
-                      orders.map((o) => (
-                        <tr key={o.id} className="hover:bg-gray-50">
-                          <td className="border px-3 py-2">{o.dt_entrada}</td>
-
-                          <td className="border px-3 py-2">
-                            <div className="font-medium">{o.cliente_nome}</div>
-                            <div className="text-xs text-gray-600">
-                              {o.cliente_telefone ? maskPhone(o.cliente_telefone) : ""}
-                            </div>
-                          </td>
-
-                          <td className="border px-3 py-2">{o.item || ""}</td>
-
-                          <td className="border px-3 py-2">
-                            {formatBRLFromNumber(Number(o.valor) || 0)}
-                            {o.desconto_tipo && o.desconto_valor != null ? (
-                              <div className="text-xs text-slate-600">
-                                desconto{" "}
-                                {o.desconto_tipo === "percent"
-                                  ? `${o.desconto_valor}%`
-                                  : formatBRLFromNumber(Number(o.desconto_valor) || 0)}
-                              </div>
-                            ) : null}
-                          </td>
-
-                          <td className="border px-3 py-2">{o.status}</td>
-
-                          <td className="border px-3 py-2">
-                            <div className="flex gap-2 items-center">
-                              <button
-                                className="border px-2 py-1 rounded"
-                                onClick={() => pickOrderToEdit(o)}
-                              >
-                                Editar
-                              </button>
-
-                              <button
-                                className="border px-2 py-1 rounded inline-flex items-center gap-1"
-                                onClick={() => openPreview(o)}
-                                title="Visualizar"
-                              >
-                                <Eye size={16} />
-                                Visualizar
-                              </button>
-
-                              <button
-                                className="border px-2 py-1 rounded inline-flex items-center justify-center"
-                                onClick={() => removeOrder(o)}
-                                title="Excluir"
-                              >
-                                <Trash2 size={16} />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
-
-              {/* MOBILE/CARDS */}
-              <div className="md:hidden space-y-3">
+              <tbody>
                 {orders.length === 0 ? (
-                  <div className="border rounded p-3 text-gray-600">
-                    Nenhum pedido neste status.
-                  </div>
+                  <tr>
+                    <td colSpan={6} className="border px-3 py-3 text-gray-600">
+                      Nenhum pedido neste status.
+                    </td>
+                  </tr>
                 ) : (
                   orders.map((o) => (
-                    <div key={o.id} className="border rounded p-3">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="text-xs text-slate-600">Entrada</div>
-                          <div className="font-semibold">{o.dt_entrada}</div>
-                        </div>
-                        <div className="text-right">
-                          <div className="text-xs text-slate-600">Total</div>
-                          <div className="font-extrabold">
-                            {formatBRLFromNumber(Number(o.valor) || 0)}
-                          </div>
-                        </div>
-                      </div>
+                    <tr key={o.id} className="hover:bg-gray-50">
+                      <td className="border px-3 py-2">{o.dt_entrada}</td>
 
-                      <div className="mt-2">
-                        <div className="text-xs text-slate-600">Cliente</div>
-                        <div className="font-medium break-words">{o.cliente_nome}</div>
-                        {o.cliente_telefone ? (
-                          <div className="text-xs text-gray-600">
-                            {maskPhone(o.cliente_telefone)}
-                          </div>
-                        ) : null}
-                      </div>
-
-                      {o.item ? (
-                        <div className="mt-2">
-                          <div className="text-xs text-slate-600">Item</div>
-                          <div className="break-words">{o.item}</div>
+                      <td className="border px-3 py-2">
+                        <div className="font-medium">{o.cliente_nome}</div>
+                        <div className="text-xs text-gray-600">
+                          {o.cliente_telefone
+                            ? maskPhone(o.cliente_telefone)
+                            : ""}
                         </div>
-                      ) : null}
+                      </td>
 
-                      <div className="mt-2 flex items-center justify-between gap-3">
-                        <div>
-                          <div className="text-xs text-slate-600">Status</div>
-                          <div className="font-semibold">{o.status}</div>
-                        </div>
+                      <td className="border px-3 py-2">{o.item || ""}</td>
 
+                      <td className="border px-3 py-2">
+                        {formatBRLFromNumber(Number(o.valor) || 0)}
                         {o.desconto_tipo && o.desconto_valor != null ? (
-                          <div className="text-right">
-                            <div className="text-xs text-slate-600">Desconto</div>
-                            <div className="text-sm">
-                              {o.desconto_tipo === "percent"
-                                ? `${o.desconto_valor}%`
-                                : formatBRLFromNumber(Number(o.desconto_valor) || 0)}
-                            </div>
+                          <div className="text-xs text-slate-600">
+                            desconto{" "}
+                            {o.desconto_tipo === "percent"
+                              ? `${o.desconto_valor}%`
+                              : formatBRLFromNumber(Number(o.desconto_valor) || 0)}
                           </div>
                         ) : null}
-                      </div>
+                      </td>
 
-                      <div className="mt-3 grid grid-cols-3 gap-2">
-                        <button
-                          className="border px-2 py-2 rounded text-sm"
-                          onClick={() => pickOrderToEdit(o)}
-                        >
-                          Editar
-                        </button>
+                      <td className="border px-3 py-2">{o.status}</td>
 
-                        <button
-                          className="border px-2 py-2 rounded text-sm inline-flex items-center justify-center gap-1"
-                          onClick={() => openPreview(o)}
-                          title="Visualizar"
-                        >
-                          <Eye size={16} />
-                          Ver
-                        </button>
+                      <td className="border px-3 py-2">
+                        <div className="flex gap-2 items-center">
+                          <button
+                            className="border px-2 py-1 rounded"
+                            onClick={() => pickOrderToEdit(o)}
+                          >
+                            Editar
+                          </button>
 
-                        <button
-                          className="border px-2 py-2 rounded text-sm inline-flex items-center justify-center"
-                          onClick={() => removeOrder(o)}
-                          title="Excluir"
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      </div>
-                    </div>
+                          <button
+                            className="border px-2 py-1 rounded inline-flex items-center gap-1"
+                            onClick={() => openPreview(o)}
+                            title="Visualizar"
+                          >
+                            <Eye size={16} />
+                            Visualizar
+                          </button>
+
+                          <button
+                            className="border px-2 py-1 rounded inline-flex items-center justify-center"
+                            onClick={() => removeOrder(o)}
+                            title="Excluir"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
                   ))
                 )}
-              </div>
-            </>
+              </tbody>
+            </table>
           )}
         </div>
       </div>
@@ -1615,6 +1542,7 @@ function PreviewModal(props: {
   );
 
   const totalFinal = useMemo(() => {
+    // valor salvo já deve ser o total final
     const saved = Number(props.order.valor || 0);
     return saved > 0 ? saved : total;
   }, [props.order.valor, total]);
@@ -1635,7 +1563,8 @@ function PreviewModal(props: {
       if (!shareOpen) return;
       const el = shareBoxRef.current;
       if (!el) return;
-      if (e.target instanceof Node && !el.contains(e.target)) setShareOpen(false);
+      if (e.target instanceof Node && !el.contains(e.target))
+        setShareOpen(false);
     };
 
     document.addEventListener("keydown", onKey);
@@ -1655,7 +1584,10 @@ function PreviewModal(props: {
       backgroundColor: "#ffffff",
     });
 
-    const fileName = `pedido-${props.order.dt_entrada || new Date().toISOString().slice(0, 10)}.png`;
+    const fileName = `pedido-${
+      props.order.dt_entrada || new Date().toISOString().slice(0, 10)
+    }.png`;
+
     return { dataUrl, fileName };
   };
 
@@ -1683,7 +1615,9 @@ function PreviewModal(props: {
         });
       } else {
         downloadDataUrl(dataUrl, fileName);
-        alert("Seu navegador não suportou compartilhar arquivo. Fiz o download do PNG.");
+        alert(
+          "Seu navegador não suportou compartilhar arquivo. Fiz o download do PNG."
+        );
       }
     } catch (err: any) {
       console.log("[PEDIDOS] share image error:", err);
@@ -1710,54 +1644,64 @@ function PreviewModal(props: {
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-3 sm:p-4">
+    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
       <div className="bg-white rounded-lg w-full max-w-5xl shadow-lg overflow-hidden">
-        <div className="flex items-center justify-between px-4 sm:px-5 py-3 sm:py-4 border-b">
-          <div className="font-bold text-base sm:text-lg">Pré-visualização</div>
-          <button className="border rounded p-2" onClick={props.onClose} title="Fechar">
+        <div className="flex items-center justify-between px-5 py-4 border-b">
+          <div className="font-bold text-lg">Pré-visualização</div>
+          <button
+            className="border rounded p-2"
+            onClick={props.onClose}
+            title="Fechar"
+          >
             <X size={18} />
           </button>
         </div>
 
-        <div className="p-3 sm:p-5 overflow-auto max-h-[75vh]">
-          <div ref={previewRef} className="border-2 border-black rounded-lg p-3 sm:p-4 bg-white">
+        <div className="p-5 overflow-auto max-h-[75vh]">
+          <div
+            ref={previewRef}
+            className="border-2 border-black rounded-lg p-4 bg-white"
+          >
             <div className="text-sm">
               {props.tenantLoading ? (
-                <div className="text-gray-600">Carregando dados da empresa...</div>
+                <div className="text-gray-600">
+                  Carregando dados da empresa...
+                </div>
               ) : (
                 <>
-                  {/* MOBILE: empilha; SM+: duas colunas */}
-                  <div className="grid grid-cols-1 sm:grid-cols-[1fr_240px] gap-4 items-start">
+                  <div className="grid grid-cols-[1fr_240px] gap-4 items-start">
                     <div className="min-w-0">
-                      <div className="font-bold text-base break-words">
+                      <div className="font-bold text-base">
                         {props.tenant?.name || ""}
                       </div>
 
                       <div className="flex flex-wrap gap-4 mt-1">
-                        <div className="break-words">
+                        <div>
                           <b>CNPJ:</b> {props.tenant?.cnpj || ""}
                         </div>
-                        <div className="break-words">
+                        <div>
                           <b>IE:</b> {props.tenant?.ie || ""}
                         </div>
                       </div>
 
-                      <div className="mt-1 break-words">
+                      <div className="mt-1">
                         <b>Endereço:</b> {props.tenant?.endereco || ""}
                       </div>
 
-                      <div className="mt-1 break-words">
+                      <div className="mt-1">
                         <b>Fone:</b>{" "}
-                        {props.tenant?.phone ? maskPhone(props.tenant.phone) : ""}
+                        {props.tenant?.phone
+                          ? maskPhone(props.tenant.phone)
+                          : ""}
                       </div>
                     </div>
 
-                    <div className="flex justify-start sm:justify-end">
+                    <div className="flex justify-end">
                       {props.tenant?.logo_url ? (
                         <img
                           src={props.tenant.logo_url}
                           alt="Logo da empresa"
-                          className="max-h-[140px] sm:max-h-[200px] w-full sm:w-auto max-w-[320px] object-contain"
+                          className="max-h-[200px] max-w-[300px] object-contain"
                           crossOrigin="anonymous"
                         />
                       ) : null}
@@ -1770,26 +1714,28 @@ function PreviewModal(props: {
             <div className="border-t-2 border-black my-4" />
 
             <div className="text-sm">
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
-                <div className="break-words">
+              <div className="flex flex-wrap gap-4">
+                <div>
                   <b>Data:</b> {props.order.dt_entrada}
                 </div>
-                <div className="break-words">
+                <div>
                   <b>Status:</b> {props.order.status}
                 </div>
-                <div className="break-words">
+                <div>
                   <b>Cliente:</b> {props.order.cliente_nome}
                 </div>
-                <div className="break-words">
+                <div>
                   <b>Fone:</b>{" "}
-                  {props.order.cliente_telefone ? maskPhone(props.order.cliente_telefone) : ""}
+                  {props.order.cliente_telefone
+                    ? maskPhone(props.order.cliente_telefone)
+                    : ""}
                 </div>
               </div>
             </div>
 
             <div className="border-t-2 border-black my-4" />
 
-            <div className="text-center font-bold text-base sm:text-lg break-words">
+            <div className="text-center font-bold text-lg">
               {props.order.item || ""}
             </div>
 
@@ -1822,11 +1768,13 @@ function PreviewModal(props: {
                   ) : (
                     itens.map((it) => (
                       <tr key={it.n}>
-                        <td className="border-2 border-black px-3 py-2">{it.n}</td>
-                        <td className="border-2 border-black px-3 py-2 break-words">
+                        <td className="border-2 border-black px-3 py-2">
+                          {it.n}
+                        </td>
+                        <td className="border-2 border-black px-3 py-2">
                           {it.desc}
                         </td>
-                        <td className="border-2 border-black px-3 py-2 text-right whitespace-nowrap">
+                        <td className="border-2 border-black px-3 py-2 text-right">
                           {formatBRLFromNumber(it.value)}
                         </td>
                       </tr>
@@ -1845,30 +1793,31 @@ function PreviewModal(props: {
               {discount > 0 ? (
                 <div>
                   <b>DESCONTO:</b> -{formatBRLFromNumber(discount)}
-                  {discountType === "percent" ? ` (${props.order.desconto_valor ?? 0}%)` : ""}
+                  {discountType === "percent"
+                    ? ` (${props.order.desconto_valor ?? 0}%)`
+                    : ""}
                 </div>
               ) : null}
 
-              <div className="font-extrabold text-lg sm:text-xl">
+              <div className="font-extrabold text-xl">
                 TOTAL: {formatBRLFromNumber(totalFinal)}
               </div>
             </div>
           </div>
         </div>
 
-        {/* MOBILE: botões quebram e ficam full */}
-        <div className="px-4 sm:px-5 py-3 sm:py-4 border-t flex flex-col sm:flex-row sm:items-center sm:justify-end gap-2">
+        <div className="px-5 py-4 border-t flex items-center justify-end gap-2">
           <button
-            className="border px-3 py-2 rounded inline-flex items-center justify-center gap-2 w-full sm:w-auto"
+            className="border px-3 py-2 rounded inline-flex items-center gap-2"
             onClick={props.onPrint}
           >
             <Printer size={16} />
             Imprimir
           </button>
 
-          <div className="relative w-full sm:w-auto" ref={shareBoxRef}>
+          <div className="relative" ref={shareBoxRef}>
             <button
-              className="border px-3 py-2 rounded inline-flex items-center justify-center gap-2 w-full sm:w-auto"
+              className="border px-3 py-2 rounded inline-flex items-center gap-2"
               onClick={() => setShareOpen((v) => !v)}
               type="button"
             >
@@ -1877,7 +1826,7 @@ function PreviewModal(props: {
             </button>
 
             {shareOpen && (
-              <div className="absolute right-0 bottom-12 z-50 w-72 sm:w-64 rounded border bg-white shadow overflow-hidden">
+              <div className="absolute right-0 bottom-12 z-50 w-64 rounded border bg-white shadow overflow-hidden">
                 <button
                   type="button"
                   className="w-full px-3 py-2 flex items-center gap-2 hover:bg-gray-50"
@@ -1920,7 +1869,7 @@ function PreviewModal(props: {
           </div>
 
           <button
-            className="bg-black text-white px-3 py-2 rounded w-full sm:w-auto"
+            className="bg-black text-white px-3 py-2 rounded"
             onClick={props.onClose}
           >
             Fechar
