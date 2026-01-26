@@ -1589,7 +1589,7 @@ function PreviewModal(props: {
     if (!previewRef.current) return null;
 
     const node = previewRef.current;
-    if (!node) return;
+    if (!node) return null;
 
     const dataUrl = await toPng(node, {
       cacheBust: true,
