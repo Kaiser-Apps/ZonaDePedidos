@@ -1086,7 +1086,7 @@ export default function PedidosPanel() {
   return (
     <div className="space-y-4">
       <div className="border rounded p-4">
-        <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div>
             <div className="font-bold text-lg">
               {isEdit ? "Editar Pedido" : "Novo Pedido"}
@@ -1101,10 +1101,10 @@ export default function PedidosPanel() {
             )}
           </div>
 
-          <div className="flex gap-2">
+          <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
             {isEdit && (
               <button
-                className="border px-3 py-2 rounded"
+                className="border px-3 py-2 rounded w-full sm:w-auto"
                 onClick={resetForm}
                 disabled={saving}
               >
@@ -1113,7 +1113,7 @@ export default function PedidosPanel() {
             )}
 
             <button
-              className="bg-black text-white px-3 py-2 rounded"
+              className="bg-black text-white px-3 py-2 rounded w-full sm:w-auto"
               onClick={save}
               disabled={saving}
             >
@@ -1255,7 +1255,6 @@ export default function PedidosPanel() {
                 const v = e.target.value;
 
                 if (form.desconto_tipo === "percent") {
-                  // permite "10" ou "10,5"
                   const cleaned = v
                     .replace(/[^\d,]/g, "")
                     .replace(/(,.*),/g, "$1");
@@ -1282,7 +1281,7 @@ export default function PedidosPanel() {
           {/* ✅ RESUMO */}
           <div className="md:col-span-3">
             <div className="border rounded p-3 bg-slate-50 text-sm">
-              <div className="flex flex-wrap gap-6">
+              <div className="flex flex-col sm:flex-row sm:flex-wrap gap-4 sm:gap-6">
                 <div>
                   <div className="text-xs text-slate-600">Subtotal</div>
                   <div className="font-semibold">
@@ -1309,8 +1308,8 @@ export default function PedidosPanel() {
               </div>
 
               <div className="text-xs text-slate-500 mt-2">
-                Observação: o total final será salvo em <b>valor</b> e o subtotal
-                em <b>valor_bruto</b>.
+                Observação: o total final será salvo em <b>valor</b> e o subtotal em{" "}
+                <b>valor_bruto</b>.
               </div>
             </div>
           </div>
@@ -1336,13 +1335,14 @@ export default function PedidosPanel() {
                 }));
               }}
               placeholder={`Ex:
-1 AMORTECEDOR DIANTEIRO - 250
-2 TERMINAL - 85
-3 MAO DE OBRA - 1500`}
+    1 AMORTECEDOR DIANTEIRO - 250
+    2 TERMINAL - 85
+    3 MAO DE OBRA - 1500`}
             />
           </label>
         </div>
       </div>
+
 
       <div className="border rounded p-4">
         <div className="flex flex-wrap gap-2 items-center">
