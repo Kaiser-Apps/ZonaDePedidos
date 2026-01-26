@@ -1,16 +1,49 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { supabase } from "../../src/lib/supabaseClient";
+
+const EMAIL_CACHE_KEY = "zp_last_email";
 
 export default function LoginPage() {
   const router = useRouter();
 
   const [email, setEmail] = useState("");
   const [senha, setSenha] = useState("");
+
   const [busy, setBusy] = useState(false);
+
+  // ✅ Reenvio com proteção de rate limit
+  const [resendBusy, setResendBusy] = useState(false);
+  const [cooldown, setCooldown] = useState(0);
+
+  // ✅ Só mostra o botão depois do erro "Email not confirmed"
+  const [showResend, setShowResend] = useState(false);
+
+  // ✅ Carrega o último email salvo (cache)
+  useEffect(() => {
+    try {
+      const cached = localStorage.getItem(EMAIL_CACHE_KEY) || "";
+      if (cached) setEmail(cached);
+    } catch {}
+  }, []);
+
+  // ✅ Atualiza cooldown do reenvio
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const t = setInterval(() => setCooldown((c) => c - 1), 1000);
+    return () => clearInterval(t);
+  }, [cooldown]);
+
+  // ✅ Salva email no cache (use no onChange / onBlur)
+  const setEmailAndCache = (value: string) => {
+    setEmail(value);
+    try {
+      localStorage.setItem(EMAIL_CACHE_KEY, value.trim().toLowerCase());
+    } catch {}
+  };
 
   const onLogin = async () => {
     const e = email.trim().toLowerCase();
@@ -18,6 +51,11 @@ export default function LoginPage() {
       alert("Informe e-mail e senha.");
       return;
     }
+
+    // ✅ sempre salva o email usado
+    try {
+      localStorage.setItem(EMAIL_CACHE_KEY, e);
+    } catch {}
 
     setBusy(true);
     try {
@@ -30,7 +68,18 @@ export default function LoginPage() {
 
       if (error) {
         console.log("[LOGIN] error:", error);
-        alert(error.message);
+
+        if (error.message === "Email not confirmed") {
+          // ✅ habilita o botão somente nesse caso
+          setShowResend(true);
+
+          alert(
+            "Seu email ainda não foi confirmado 📩\n\nVerifique sua caixa de entrada ou spam e clique no link de ativação.\n\nAgora você pode usar o botão para reenviar."
+          );
+        } else {
+          alert(error.message);
+        }
+
         return;
       }
 
@@ -38,6 +87,50 @@ export default function LoginPage() {
       router.replace("/");
     } finally {
       setBusy(false);
+    }
+  };
+
+  const onResendConfirmation = async () => {
+    const e = email.trim().toLowerCase();
+
+    if (!e) {
+      alert("Informe seu e-mail primeiro.");
+      return;
+    }
+
+    if (cooldown > 0) {
+      alert(`Aguarde ${cooldown}s para reenviar novamente.`);
+      return;
+    }
+
+    setResendBusy(true);
+    try {
+      const { error } = await supabase.auth.resend({
+        type: "signup",
+        email: e,
+      });
+
+      if (error) {
+        console.log("[LOGIN] resend error:", error);
+
+        const msg = (error.message || "").toLowerCase();
+
+        if (msg.includes("rate limit")) {
+          setCooldown(120);
+          alert(
+            "Você solicitou muitos envios em pouco tempo.\n\nAguarde 2 minutos e tente novamente."
+          );
+          return;
+        }
+
+        alert(error.message);
+        return;
+      }
+
+      setCooldown(60);
+      alert("Email de confirmação reenviado! 📩\n\nVerifique sua caixa de entrada e o spam.");
+    } finally {
+      setResendBusy(false);
     }
   };
 
@@ -59,9 +152,12 @@ export default function LoginPage() {
             <div className="text-xs text-slate-600 mb-1">E-mail</div>
             <input
               value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              onChange={(e) => setEmailAndCache(e.target.value)}
+              onBlur={(e) => setEmailAndCache(e.target.value)}
               placeholder="seuemail@exemplo.com"
               className="w-full border rounded-xl px-3 py-2 text-sm"
+              autoComplete="email"
+              inputMode="email"
             />
           </div>
 
@@ -73,6 +169,7 @@ export default function LoginPage() {
               placeholder="••••••••"
               type="password"
               className="w-full border rounded-xl px-3 py-2 text-sm"
+              autoComplete="current-password"
             />
           </div>
 
@@ -83,6 +180,21 @@ export default function LoginPage() {
           >
             {busy ? "Entrando..." : "Entrar"}
           </button>
+
+          {/* ✅ Só aparece depois do erro "Email not confirmed" */}
+          {showResend && (
+            <button
+              onClick={onResendConfirmation}
+              disabled={resendBusy || cooldown > 0}
+              className="w-full border px-5 py-2 rounded-xl text-sm font-semibold disabled:opacity-60"
+            >
+              {cooldown > 0
+                ? `Reenviar em ${cooldown}s`
+                : resendBusy
+                ? "Reenviando..."
+                : "Reenviar email de confirmação"}
+            </button>
+          )}
 
           <div className="text-xs text-slate-600 text-center">
             Ainda não tem conta?{" "}

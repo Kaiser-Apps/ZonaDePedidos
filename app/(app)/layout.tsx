@@ -87,34 +87,80 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const run = async () => {
-      const { data } = await supabase.auth.getSession();
-      if (!data.session) {
+      try {
+        const { data: sessionData, error: sessErr } =
+          await supabase.auth.getSession();
+
+        if (sessErr) {
+          console.log("[LAYOUT] getSession error:", sessErr);
+          router.replace("/login");
+          return;
+        }
+
+        if (!sessionData.session) {
+          router.replace("/login");
+          return;
+        }
+
+        const { data: userData, error: userErr } = await supabase.auth.getUser();
+        if (userErr) {
+          console.log("[LAYOUT] getUser error:", userErr);
+          router.replace("/login");
+          return;
+        }
+
+        const userId = userData?.user?.id;
+        if (!userId) {
+          router.replace("/login");
+          return;
+        }
+
+        // ✅ AQUI era o seu 406: trocamos single() -> maybeSingle()
+        const { data: profile, error: profErr } = await supabase
+          .from("profiles")
+          .select("tenant_id")
+          .eq("user_id", userId)
+          .maybeSingle();
+
+        if (profErr) {
+          console.log("[LAYOUT] profiles error:", profErr);
+
+          // se for RLS/sem permissão, é melhor forçar relogin pra não travar
+          router.replace("/login");
+          return;
+        }
+
+        // Se não existe profile, não pode continuar logado no app
+        if (!profile?.tenant_id) {
+          console.log("[LAYOUT] no profile/tenant_id for user:", userId);
+          router.replace("/login");
+          return;
+        }
+
+        const { data: tenant, error: tenErr } = await supabase
+          .from("tenants")
+          .select(
+            "id, subscription_status, trial_ends_at, current_period_end, plan"
+          )
+          .eq("id", profile.tenant_id)
+          .maybeSingle();
+
+        if (tenErr) {
+          console.log("[LAYOUT] tenants error:", tenErr);
+          // ainda assim não trava, só segue sem billing
+          setTenantBilling(null);
+          return;
+        }
+
+        setTenantBilling((tenant as TenantBilling) || null);
+      } catch (e) {
+        console.log("[LAYOUT] unexpected:", e);
         router.replace("/login");
         return;
+      } finally {
+        // ✅ garante que nunca fica preso no "Carregando..."
+        setLoading(false);
       }
-
-      const { data: user } = await supabase.auth.getUser();
-      const userId = user?.user?.id;
-      if (!userId) return;
-
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("tenant_id")
-        .eq("user_id", userId)
-        .single();
-
-      if (!profile?.tenant_id) return;
-
-      const { data: tenant } = await supabase
-        .from("tenants")
-        .select(
-          "id, subscription_status, trial_ends_at, current_period_end, plan"
-        )
-        .eq("id", profile.tenant_id)
-        .single();
-
-      setTenantBilling((tenant as TenantBilling) || null);
-      setLoading(false);
     };
 
     run();
@@ -198,7 +244,6 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               className="sm:hidden border rounded-xl px-3 py-2 bg-white hover:bg-slate-50 min-h-[44px]"
               aria-label="Abrir menu"
             >
-              {/* ícone hambúrguer simples */}
               <svg
                 width="20"
                 height="20"

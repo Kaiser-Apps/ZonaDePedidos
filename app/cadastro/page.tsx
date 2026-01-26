@@ -83,7 +83,7 @@ export default function CadastroPage() {
         if (signInErr || !signInData.session?.access_token) {
           console.log("[CADASTRO] signIn after signUp error:", signInErr);
           alert(
-            "Conta criada, mas não foi possível iniciar sessão automaticamente. Verifique se o Supabase exige confirmação por e-mail."
+            "Conta criada! Verifique seu email para confirmação. Caso não encontre, verifique também a caixa de spam"
           );
           router.replace("/login");
           return;
