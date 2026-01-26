@@ -25,20 +25,7 @@ function resolveAsaasBaseUrl() {
 }
 
 function normalizeAsaasApiKey(raw: string | undefined | null) {
-  const key = String(raw || "").trim();
-  if (!key) return "";
-
-  if (key.startsWith("$")) return key;
-
-  if (
-    key.startsWith("aact_") ||
-    key.startsWith("aact_prod_") ||
-    key.startsWith("aact_sandbox_")
-  ) {
-    return `$${key}`;
-  }
-
-  return key;
+  return String(raw || "").trim();
 }
 
 async function safeReadJson(resp: Response) {
@@ -62,6 +49,13 @@ function firstAsaasErrorDescription(asaasBody: any) {
   return typeof desc === "string" && desc.trim() ? desc.trim() : null;
 }
 
+function maskKey(key: string) {
+  const k = String(key || "");
+  if (!k) return "";
+  if (k.length <= 10) return "***";
+  return `${k.slice(0, 10)}***${k.slice(-6)}`;
+}
+
 export async function POST(req: Request) {
   const startedAt = Date.now();
 
@@ -71,6 +65,7 @@ export async function POST(req: Request) {
 
     const ASAAS_BASE_URL = resolveAsaasBaseUrl();
     const ASAAS_API_KEY = normalizeAsaasApiKey(process.env.ASAAS_API_KEY);
+    const ASAAS_ENV = (process.env.ASAAS_ENV || "").toLowerCase().trim();
 
     if (!SUPABASE_URL)
       return jsonError("NEXT_PUBLIC_SUPABASE_URL ausente no env", 500);
@@ -89,9 +84,12 @@ export async function POST(req: Request) {
 
     if (!jwt) return jsonError("Authorization Bearer token ausente", 401);
 
+    // ✅ Logs pra confirmar a key REAL em runtime (sem expor)
     console.log("[ASAAS] baseUrl:", ASAAS_BASE_URL);
+    console.log("[ASAAS] ASAAS_ENV:", ASAAS_ENV);
+    console.log("[ASAAS] apiKey masked:", maskKey(ASAAS_API_KEY));
+    console.log("[ASAAS] apiKey length:", ASAAS_API_KEY.length);
     console.log("[ASAAS] env supabase host:", new URL(SUPABASE_URL).host);
-    console.log("[ASAAS] apiKey startsWith$:", ASAAS_API_KEY.startsWith("$"));
 
     const { data: userResp, error: userErr } = await supabaseAdmin.auth.getUser(
       jwt
@@ -190,6 +188,7 @@ export async function POST(req: Request) {
       const custResp = await fetch(`${ASAAS_BASE_URL}/v3/customers`, {
         method: "POST",
         headers: {
+          Accept: "application/json",
           "Content-Type": "application/json",
           access_token: ASAAS_API_KEY,
         },
@@ -205,7 +204,8 @@ export async function POST(req: Request) {
         });
 
         const msg =
-          firstAsaasErrorDescription(custJson) || "Falha ao criar customer no Asaas";
+          firstAsaasErrorDescription(custJson) ||
+          "Falha ao criar customer no Asaas";
 
         return jsonError(msg, 502, {
           status: custResp.status,
@@ -236,7 +236,6 @@ export async function POST(req: Request) {
     // 2) Cria link recorrente
     console.log("[ASAAS] creating recurring payment link...", { cycle, value });
 
-    // ✅ Para RECURRENT o exemplo oficial usa billingType CREDIT_CARD
     const linkPayload: any = {
       name: planName,
       description: `Assinatura (${cycle})`,
@@ -251,6 +250,7 @@ export async function POST(req: Request) {
     const linkResp = await fetch(`${ASAAS_BASE_URL}/v3/paymentLinks`, {
       method: "POST",
       headers: {
+        Accept: "application/json",
         "Content-Type": "application/json",
         access_token: ASAAS_API_KEY,
       },
