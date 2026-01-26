@@ -1478,26 +1478,36 @@ export default function PedidosPanel() {
   );
 }
 
-function Field(props: {
+type FieldProps = {
   label: string;
-  value: string;
-  onChange: (v: string) => void;
+  value: any;
+  onChange: (v: any) => void;
   placeholder?: string;
-  type?: "text" | "date";
-}) {
+  type?: string; // ✅ adiciona isso
+};
+
+function Field({
+  label,
+  value,
+  onChange,
+  placeholder,
+  type = "text", // ✅ default seguro
+}: FieldProps) {
   return (
-    <label className="block">
-      <div className="text-sm font-medium mb-1">{props.label}</div>
+    <label className="block min-w-0">
+      <div className="text-sm font-medium mb-1">{label}</div>
+
       <input
-        className="border rounded px-3 py-2 w-full"
-        value={props.value}
-        onChange={(e) => props.onChange(e.target.value)}
-        placeholder={props.placeholder}
-        type={props.type || "text"}
+        type={type}
+        value={value ?? ""}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="border rounded px-3 py-2 w-full max-w-full min-w-0 appearance-none"
       />
     </label>
   );
 }
+
 
 function PreviewModal(props: {
   tenant: TenantInfo | null;
