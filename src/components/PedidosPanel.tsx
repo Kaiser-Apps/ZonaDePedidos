@@ -1588,11 +1588,15 @@ function PreviewModal(props: {
   const buildPng = async (): Promise<{ dataUrl: string; fileName: string } | null> => {
     if (!previewRef.current) return null;
 
-    const dataUrl = await toPng(previewRef.current, {
+    const node = previewRef.current;
+    if (!node) return;
+
+    const dataUrl = await toPng(node, {
       cacheBust: true,
       pixelRatio: 2,
-      backgroundColor: "#ffffff",
+      style: { transform: "scale(1)", transformOrigin: "top left" },
     });
+
 
     const fileName = `pedido-${
       props.order.dt_entrada || new Date().toISOString().slice(0, 10)
@@ -1600,6 +1604,32 @@ function PreviewModal(props: {
 
     return { dataUrl, fileName };
   };
+
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const [scale, setScale] = useState(1);
+
+  const PAPER_W = 900;
+
+  useEffect(() => {
+    const el = stageRef.current;
+    if (!el) return;
+
+    const ro = new ResizeObserver(() => {
+      const rect = el.getBoundingClientRect();
+
+      const availW = rect.width;
+
+      // ✅ escala só pela largura (altura vai no scroll)
+      const sW = availW / PAPER_W;
+
+      const next = Math.min(1, sW);
+      setScale(next > 0 ? next : 1);
+    });
+
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
 
   const shareImage = async () => {
     setSharingImg(true);
@@ -1654,8 +1684,8 @@ function PreviewModal(props: {
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
-      <div className="bg-white rounded-lg w-full max-w-5xl shadow-lg overflow-hidden">
+    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center">
+      <div className="bg-white rounded-lg w-[1024px] shadow-lg overflow-hidden">
         <div className="flex items-center justify-between px-5 py-4 border-b">
           <div className="font-bold text-lg">Pré-visualização</div>
           <button
@@ -1667,150 +1697,164 @@ function PreviewModal(props: {
           </button>
         </div>
 
-        <div className="p-5 overflow-auto max-h-[75vh]">
-          <div
-            ref={previewRef}
-            className="border-2 border-black rounded-lg p-4 bg-white"
-          >
-            <div className="text-sm">
-              {props.tenantLoading ? (
-                <div className="text-gray-600">
-                  Carregando dados da empresa...
-                </div>
-              ) : (
-                <>
-                  <div className="grid grid-cols-[1fr_240px] gap-4 items-start">
-                    <div className="min-w-0">
-                      <div className="font-bold text-base">
-                        {props.tenant?.name || ""}
+        <div className="p-5">
+          <div ref={stageRef} className="overflow-auto h-[75vh]">
+            <div className="flex justify-center">
+              <div
+                style={{
+                  width: PAPER_W,
+                  transform: `scale(${scale})`,
+                  transformOrigin: "top center",
+                }}
+              >
+                {/* ✅ ESTE é o container que será impresso/baixado */}
+                <div
+                  ref={previewRef}
+                  className="border-2 border-black rounded-lg p-4 bg-white"
+                  style={{ width: PAPER_W }}
+                >
+                  <div className="text-sm">
+                    {props.tenantLoading ? (
+                      <div className="text-gray-600">
+                        Carregando dados da empresa...
                       </div>
+                    ) : (
+                      <>
+                        <div className="grid grid-cols-[1fr_240px] gap-4 items-start">
+                          <div className="min-w-0">
+                            <div className="font-bold text-base">
+                              {props.tenant?.name || ""}
+                            </div>
 
-                      <div className="flex flex-wrap gap-4 mt-1">
-                        <div>
-                          <b>CNPJ:</b> {props.tenant?.cnpj || ""}
+                            <div className="flex gap-4 mt-1">
+                              <div>
+                                <b>CNPJ:</b> {props.tenant?.cnpj || ""}
+                              </div>
+                              <div>
+                                <b>IE:</b> {props.tenant?.ie || ""}
+                              </div>
+                            </div>
+
+                            <div className="mt-1">
+                              <b>Endereço:</b> {props.tenant?.endereco || ""}
+                            </div>
+
+                            <div className="mt-1">
+                              <b>Fone:</b>{" "}
+                              {props.tenant?.phone ? maskPhone(props.tenant.phone) : ""}
+                            </div>
+                          </div>
+
+                          <div className="flex justify-end">
+                            {props.tenant?.logo_url ? (
+                              <img
+                                src={props.tenant.logo_url}
+                                alt="Logo da empresa"
+                                className="max-h-[200px] max-w-[300px] object-contain"
+                                crossOrigin="anonymous"
+                              />
+                            ) : null}
+                          </div>
                         </div>
-                        <div>
-                          <b>IE:</b> {props.tenant?.ie || ""}
-                        </div>
-                      </div>
+                      </>
+                    )}
+                  </div>
 
-                      <div className="mt-1">
-                        <b>Endereço:</b> {props.tenant?.endereco || ""}
-                      </div>
+                  <div className="border-t-2 border-black my-4" />
 
-                      <div className="mt-1">
+                  <div className="text-sm space-y-1">
+                    <div className="flex gap-6">
+                      <div>
+                        <b>Data:</b> {props.order.dt_entrada}
+                      </div>
+                      <div>
+                        <b>Status:</b> {props.order.status}
+                      </div>
+                    </div>
+
+                    <div className="flex gap-6">
+                      <div>
+                        <b>Cliente:</b> {props.order.cliente_nome}
+                      </div>
+                      <div>
                         <b>Fone:</b>{" "}
-                        {props.tenant?.phone
-                          ? maskPhone(props.tenant.phone)
+                        {props.order.cliente_telefone
+                          ? maskPhone(props.order.cliente_telefone)
                           : ""}
                       </div>
                     </div>
+                  </div>
+        
 
-                    <div className="flex justify-end">
-                      {props.tenant?.logo_url ? (
-                        <img
-                          src={props.tenant.logo_url}
-                          alt="Logo da empresa"
-                          className="max-h-[200px] max-w-[300px] object-contain"
-                          crossOrigin="anonymous"
-                        />
-                      ) : null}
+                  <div className="border-t-2 border-black my-4" />
+
+                  <div className="text-center font-bold text-lg">
+                    {props.order.item || ""}
+                  </div>
+
+                  <div className="border-t-2 border-black my-4" />
+
+                  <div className="overflow-auto">
+                    <table className="min-w-full border-2 border-black">
+                      <thead>
+                        <tr className="bg-gray-50">
+                          <th className="border-2 border-black px-3 py-2 w-[80px] text-left">
+                            Item
+                          </th>
+                          <th className="border-2 border-black px-3 py-2 text-left">
+                            Descrição
+                          </th>
+                          <th className="border-2 border-black px-3 py-2 w-[160px] text-right">
+                            Valor
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {itens.length === 0 ? (
+                          <tr>
+                            <td className="border-2 border-black px-3 py-2">1</td>
+                            <td className="border-2 border-black px-3 py-2">—</td>
+                            <td className="border-2 border-black px-3 py-2 text-right">
+                              {formatBRLFromNumber(subtotal)}
+                            </td>
+                          </tr>
+                        ) : (
+                          itens.map((it) => (
+                            <tr key={it.n}>
+                              <td className="border-2 border-black px-3 py-2">{it.n}</td>
+                              <td className="border-2 border-black px-3 py-2">
+                                {it.desc}
+                              </td>
+                              <td className="border-2 border-black px-3 py-2 text-right">
+                                {formatBRLFromNumber(it.value)}
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* ✅ TOTAIS */}
+                  <div className="mt-4 text-sm flex flex-col items-end gap-1">
+                    <div>
+                      <b>SUBTOTAL:</b> {formatBRLFromNumber(subtotal)}
+                    </div>
+
+                    {discount > 0 ? (
+                      <div>
+                        <b>DESCONTO:</b> -{formatBRLFromNumber(discount)}
+                        {discountType === "percent"
+                          ? ` (${props.order.desconto_valor ?? 0}%)`
+                          : ""}
+                      </div>
+                    ) : null}
+
+                    <div className="font-extrabold text-xl">
+                      TOTAL: {formatBRLFromNumber(totalFinal)}
                     </div>
                   </div>
-                </>
-              )}
-            </div>
-
-            <div className="border-t-2 border-black my-4" />
-
-            <div className="text-sm">
-              <div className="flex flex-wrap gap-4">
-                <div>
-                  <b>Data:</b> {props.order.dt_entrada}
                 </div>
-                <div>
-                  <b>Status:</b> {props.order.status}
-                </div>
-                <div>
-                  <b>Cliente:</b> {props.order.cliente_nome}
-                </div>
-                <div>
-                  <b>Fone:</b>{" "}
-                  {props.order.cliente_telefone
-                    ? maskPhone(props.order.cliente_telefone)
-                    : ""}
-                </div>
-              </div>
-            </div>
-
-            <div className="border-t-2 border-black my-4" />
-
-            <div className="text-center font-bold text-lg">
-              {props.order.item || ""}
-            </div>
-
-            <div className="border-t-2 border-black my-4" />
-
-            <div className="overflow-auto">
-              <table className="min-w-full border-2 border-black">
-                <thead>
-                  <tr className="bg-gray-50">
-                    <th className="border-2 border-black px-3 py-2 w-[80px] text-left">
-                      Item
-                    </th>
-                    <th className="border-2 border-black px-3 py-2 text-left">
-                      Descrição
-                    </th>
-                    <th className="border-2 border-black px-3 py-2 w-[160px] text-right">
-                      Valor
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {itens.length === 0 ? (
-                    <tr>
-                      <td className="border-2 border-black px-3 py-2">1</td>
-                      <td className="border-2 border-black px-3 py-2">—</td>
-                      <td className="border-2 border-black px-3 py-2 text-right">
-                        {formatBRLFromNumber(subtotal)}
-                      </td>
-                    </tr>
-                  ) : (
-                    itens.map((it) => (
-                      <tr key={it.n}>
-                        <td className="border-2 border-black px-3 py-2">
-                          {it.n}
-                        </td>
-                        <td className="border-2 border-black px-3 py-2">
-                          {it.desc}
-                        </td>
-                        <td className="border-2 border-black px-3 py-2 text-right">
-                          {formatBRLFromNumber(it.value)}
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-
-            {/* ✅ TOTAIS */}
-            <div className="mt-4 text-sm flex flex-col items-end gap-1">
-              <div>
-                <b>SUBTOTAL:</b> {formatBRLFromNumber(subtotal)}
-              </div>
-
-              {discount > 0 ? (
-                <div>
-                  <b>DESCONTO:</b> -{formatBRLFromNumber(discount)}
-                  {discountType === "percent"
-                    ? ` (${props.order.desconto_valor ?? 0}%)`
-                    : ""}
-                </div>
-              ) : null}
-
-              <div className="font-extrabold text-xl">
-                TOTAL: {formatBRLFromNumber(totalFinal)}
               </div>
             </div>
           </div>
@@ -1888,4 +1932,5 @@ function PreviewModal(props: {
       </div>
     </div>
   );
+
 }
