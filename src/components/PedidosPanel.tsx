@@ -1478,6 +1478,7 @@ export default function PedidosPanel() {
 
       {previewOpen && previewOrder && (
         <PreviewModal
+          isOpen={previewOpen}
           tenant={tenantInfo}
           tenantLoading={tenantLoading}
           order={previewOrder}
@@ -1526,6 +1527,7 @@ function Field({
 
 
 function PreviewModal(props: {
+  isOpen: boolean;
   tenant: TenantInfo | null;
   tenantLoading: boolean;
   order: OrderRow;
@@ -1573,8 +1575,50 @@ function PreviewModal(props: {
     return saved > 0 ? saved : total;
   }, [props.order.valor, total]);
 
-  const previewRef = useRef<HTMLDivElement | null>(null);
 
+
+  const [logoDataUrl, setLogoDataUrl] = useState<string | null>(null);
+
+  async function toDataURLFromImageUrl(url: string) {
+    const res = await fetch(url, { mode: "cors", cache: "no-store" });
+    if (!res.ok) throw new Error(`Falha ao baixar logo: ${res.status}`);
+    const blob = await res.blob();
+
+    return await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(String(reader.result));
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  useEffect(() => {
+    let alive = true;
+
+    const load = async () => {
+      setLogoDataUrl(null);
+
+      const url = props.tenant?.logo_url;
+      if (!url) return;
+
+      try {
+        const dataUrl = await toDataURLFromImageUrl(url);
+        if (alive) setLogoDataUrl(dataUrl);
+      } catch (e) {
+        console.log("[PEDIDOS] logo to dataurl failed:", e);
+      }
+    };
+
+    load();
+
+    return () => {
+      alive = false;
+    };
+  }, [props.tenant?.logo_url, props.order.id]);
+
+
+
+  const previewRef = useRef<HTMLDivElement | null>(null);
   const [shareOpen, setShareOpen] = useState(false);
   const [sharingImg, setSharingImg] = useState(false);
   const [downloadingImg, setDownloadingImg] = useState(false);
@@ -1607,6 +1651,28 @@ function PreviewModal(props: {
     if (!previewRef.current) return null;
 
     const node = previewRef.current;
+    const imgs = Array.from(node.querySelectorAll("img")) as HTMLImageElement[];
+
+    // ✅ aguarda todas as imagens carregarem (ou falharem) antes de gerar o canvas
+    await Promise.all(
+      imgs.map((img) => {
+        // pula imagens sem src
+        if (!img.src) return Promise.resolve();
+
+        // se já carregou (e tem dimensão), ok
+        if (img.complete && img.naturalWidth > 0) return Promise.resolve();
+
+        return new Promise<void>((resolve) => {
+          const done = () => resolve();
+          img.addEventListener("load", done, { once: true });
+          img.addEventListener("error", done, { once: true });
+        });
+      })
+    );
+
+    // ✅ 2 frames: resolve bugs de layout no mobile (principalmente Safari)
+    await new Promise((r) => requestAnimationFrame(() => r(null)));
+    await new Promise((r) => requestAnimationFrame(() => r(null)));
 
     const pixelRatio = 2; // nítido sem ficar gigante
     const canvas = await toCanvas(node, {
@@ -1818,7 +1884,7 @@ function PreviewModal(props: {
                           <div className="flex justify-end">
                             {props.tenant?.logo_url ? (
                               <img
-                                src={props.tenant.logo_url}
+                                src={logoDataUrl || props.tenant.logo_url}
                                 alt="Logo da empresa"
                                 className="max-h-[200px] max-w-[300px] object-contain"
                                 crossOrigin="anonymous"
