@@ -12,7 +12,8 @@ import {
   Image as ImageIcon,
   Download,
 } from "lucide-react";
-import { toPng } from "html-to-image";
+import { toPng, toCanvas } from "html-to-image";
+
 
 type TenantCtx = {
   tenantId: string;
@@ -364,20 +365,35 @@ function openPrintWindow(order: OrderRow, tenant: TenantInfo | null) {
   <meta charset="utf-8"/>
   <title>Pedido</title>
   <style>
-    body { font-family: Arial, sans-serif; padding: 16px; }
-    .box { border: 2px solid #111; padding: 16px; border-radius: 8px; }
+    @page { size: A4; margin: 12mm; }
+    html, body { height: 100%; }
+    body { font-family: Arial, sans-serif; margin: 0; padding: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+
+    .box { border: 2px solid #111; padding: 10mm; border-radius: 8px; box-sizing: border-box; }
+
     .muted { color: #111; font-size: 12px; }
     .hr { border-top: 2px solid #111; margin: 10px 0; }
-    table { width:100%; border-collapse: collapse; margin-top: 10px; }
-    th, td { border: 2px solid #111; padding: 8px; font-size: 12px; }
+
+    table { width:100%; border-collapse: collapse; margin-top: 10px; page-break-inside: auto; }
+    thead { display: table-header-group; } /* repete cabeçalho */
+    tfoot { display: table-footer-group; }
+
+    tr { page-break-inside: avoid; page-break-after: auto; }
+    th, td { border: 2px solid #111; padding: 8px; font-size: 12px; vertical-align: top; }
     th { text-align:left; background: #f5f5f5; }
+
     .right { text-align:right; }
-    .totals { margin-top: 10px; font-size: 12px; }
+
+    .totals { margin-top: 10px; font-size: 12px; break-inside: avoid; page-break-inside: avoid; }
     .totals .row { display:flex; justify-content:flex-end; gap:16px; margin-top: 6px; }
     .totals .label { min-width: 110px; text-align:right; }
     .totals .value { min-width: 140px; text-align:right; font-weight: 700; }
     .grand { font-weight: 900; font-size: 16px; }
+
+    /* opcional: evita quebras estranhas no topo */
+    .avoid-break { break-inside: avoid; page-break-inside: avoid; }
   </style>
+
 </head>
 <body>
   <div class="box">
@@ -1585,30 +1601,73 @@ function PreviewModal(props: {
     };
   }, [shareOpen]);
 
-  const buildPng = async (): Promise<{ dataUrl: string; fileName: string } | null> => {
+  const buildPngPages = async (): Promise<
+    { pages: { dataUrl: string; fileName: string }[] } | null
+  > => {
     if (!previewRef.current) return null;
 
     const node = previewRef.current;
-    if (!node) return null;
 
-    const dataUrl = await toPng(node, {
+    const pixelRatio = 2; // nítido sem ficar gigante
+    const canvas = await toCanvas(node, {
       cacheBust: true,
-      pixelRatio: 2,
+      pixelRatio,
+      backgroundColor: "#ffffff",
       style: { transform: "scale(1)", transformOrigin: "top left" },
     });
 
-
-    const fileName = `pedido-${
+    const base = `pedido-${
       props.order.dt_entrada || new Date().toISOString().slice(0, 10)
-    }.png`;
+    }`;
 
-    return { dataUrl, fileName };
+    const pageHeight = Math.round(A4_H * pixelRatio);
+    const pages: { dataUrl: string; fileName: string }[] = [];
+
+    let pageIndex = 1;
+    for (let y = 0; y < canvas.height; y += pageHeight) {
+      const sliceH = Math.min(pageHeight, canvas.height - y);
+
+      const pageCanvas = document.createElement("canvas");
+      pageCanvas.width = canvas.width;
+      pageCanvas.height = sliceH;
+
+      const ctx2 = pageCanvas.getContext("2d");
+      if (!ctx2) continue;
+
+      ctx2.drawImage(
+        canvas,
+        0,
+        y,
+        canvas.width,
+        sliceH,
+        0,
+        0,
+        canvas.width,
+        sliceH
+      );
+
+      const dataUrl = pageCanvas.toDataURL("image/png");
+
+      const fileName =
+        pages.length === 0 && canvas.height <= pageHeight
+          ? `${base}.png`
+          : `${base}-p${pageIndex}.png`;
+
+      pages.push({ dataUrl, fileName });
+      pageIndex++;
+    }
+
+    return { pages };
   };
 
   const stageRef = useRef<HTMLDivElement | null>(null);
   const [scale, setScale] = useState(1);
 
-  const PAPER_W = 900;
+  // A4 em px (aprox em 96dpi). O pixelRatio abaixo deixa bem nítido.
+  const A4_W = 794;  // 210mm
+  const A4_H = 1123; // 297mm
+  const PAPER_W = A4_W;
+
 
   useEffect(() => {
     const el = stageRef.current;
@@ -1631,32 +1690,35 @@ function PreviewModal(props: {
   }, []);
 
 
-  const shareImage = async () => {
+    const shareImage = async () => {
     setSharingImg(true);
     try {
-      const built = await buildPng();
+      const built = await buildPngPages();
       if (!built) return;
 
-      const { dataUrl, fileName } = built;
-      const file = dataUrlToFile(dataUrl, fileName);
+      const files = built.pages.map((p) => dataUrlToFile(p.dataUrl, p.fileName));
 
       const navAny = navigator as any;
       const canShareFiles =
         typeof navAny !== "undefined" &&
         typeof navAny.share === "function" &&
         typeof navAny.canShare === "function" &&
-        navAny.canShare({ files: [file] });
+        navAny.canShare({ files });
 
       if (canShareFiles) {
         await navAny.share({
           title: "Pedido",
-          text: "Segue o pedido em imagem.",
-          files: [file],
+          text:
+            files.length > 1
+              ? "Segue o pedido em imagens (páginas A4)."
+              : "Segue o pedido em imagem.",
+          files,
         });
       } else {
-        downloadDataUrl(dataUrl, fileName);
+        // fallback: baixa todas as páginas
+        for (const p of built.pages) downloadDataUrl(p.dataUrl, p.fileName);
         alert(
-          "Seu navegador não suportou compartilhar arquivo. Fiz o download do PNG."
+          "Seu navegador não suportou compartilhar arquivos. Fiz o download das páginas em PNG."
         );
       }
     } catch (err: any) {
@@ -1667,14 +1729,16 @@ function PreviewModal(props: {
     }
   };
 
-  const downloadImage = async () => {
+
+    const downloadImage = async () => {
     setDownloadingImg(true);
     try {
-      const built = await buildPng();
+      const built = await buildPngPages();
       if (!built) return;
 
-      const { dataUrl, fileName } = built;
-      downloadDataUrl(dataUrl, fileName);
+      for (const p of built.pages) {
+        downloadDataUrl(p.dataUrl, p.fileName);
+      }
     } catch (err: any) {
       console.log("[PEDIDOS] download image error:", err);
       alert("Não foi possível baixar a imagem. Veja o console para detalhes.");
@@ -1710,9 +1774,15 @@ function PreviewModal(props: {
                 {/* ✅ ESTE é o container que será impresso/baixado */}
                 <div
                   ref={previewRef}
-                  className="border-2 border-black rounded-lg p-4 bg-white"
-                  style={{ width: PAPER_W }}
+                  className="border-2 border-black rounded-lg bg-white"
+                  style={{
+                    width: PAPER_W,
+                    minHeight: A4_H,
+                    padding: 24,
+                    boxSizing: "border-box",
+                  }}
                 >
+
                   <div className="text-sm">
                     {props.tenantLoading ? (
                       <div className="text-gray-600">

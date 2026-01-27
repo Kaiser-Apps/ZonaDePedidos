@@ -38,6 +38,15 @@ export default function BillingPanel() {
   const [promo, setPromo] = useState("");
   const [promoBusy, setPromoBusy] = useState(false);
 
+  const mensalUrl = useMemo(
+    () => (process.env.NEXT_PUBLIC_ASAAS_LINK_MENSAL || "").trim(),
+    []
+  );
+  const anualUrl = useMemo(
+    () => (process.env.NEXT_PUBLIC_ASAAS_LINK_ANUAL || "").trim(),
+    []
+  );
+
   const status = useMemo(
     () => (tenant?.subscription_status || "INACTIVE").toUpperCase(),
     [tenant]
@@ -124,51 +133,76 @@ export default function BillingPanel() {
   }, []);
 
   const handleBack = () => {
-    // Volta para a tela anterior se existir histórico; senão vai para /pedidos
+    // Volta para a tela anterior se existir histórico; senão tenta /pedidos e,
+    // se não existir, cai para /
     try {
       if (typeof window !== "undefined" && window.history.length > 1) {
         router.back();
         return;
       }
     } catch (e) {
-      console.log("[BILLING] handleBack fallback error:", e);
+      console.log("[BILLING] handleBack history check error:", e);
     }
-    router.push("/pedidos");
+
+    // fallback robusto (evita 404 no localhost)
+    (async () => {
+      try {
+        const res = await fetch("/pedidos", { method: "HEAD" });
+        if (res.ok) {
+          router.push("/pedidos");
+        } else {
+          router.push("/");
+        }
+      } catch (e) {
+        console.log("[BILLING] handleBack HEAD /pedidos error:", e);
+        router.push("/");
+      }
+    })();
   };
 
-  const openCheckout = async () => {
+  const ensureBillingEmail = async (plan: "MONTHLY" | "YEARLY") => {
+    const token = await getAccessToken();
+
+    const res = await fetch("/api/tenant/ensure-billing-email", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ plan }),
+    });
+
+    const json = await res.json().catch(() => ({} as any));
+
+    if (!res.ok) {
+      console.log("[BILLING] ensure billing_email error:", json);
+      const msg =
+        json?.message || json?.error || "Erro ao preparar checkout (billing_email).";
+      alert(msg);
+      throw new Error(msg);
+    }
+
+    return json;
+  };
+
+  const openCheckoutFixed = async (plan: "MONTHLY" | "YEARLY") => {
     if (!tenantId) return;
+
+    const url = plan === "MONTHLY" ? mensalUrl : anualUrl;
+
+    if (!url) {
+      alert(
+        plan === "MONTHLY"
+          ? "Link Mensal não configurado (NEXT_PUBLIC_ASAAS_LINK_MENSAL)."
+          : "Link Anual não configurado (NEXT_PUBLIC_ASAAS_LINK_ANUAL)."
+      );
+      return;
+    }
+
     setBusy(true);
-
     try {
-      const token = await getAccessToken();
-
-      const res = await fetch("/api/asaas/create-recurring-link", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({}),
-      });
-
-      const json = await res.json().catch(() => ({} as any));
-
-      if (!res.ok) {
-        console.log("[BILLING] create link error:", json);
-        const msg = json?.message || json?.error || "Erro ao iniciar assinatura.";
-        if (json?.extra) console.log("[BILLING] extra:", json.extra);
-        alert(msg);
-        return;
-      }
-
-      if (!json?.url) {
-        console.log("[BILLING] missing url:", json);
-        alert("Asaas não retornou URL do checkout.");
-        return;
-      }
-
-      window.location.href = json.url;
+      await ensureBillingEmail(plan);
+      window.open(url, "_blank", "noopener,noreferrer");
     } finally {
       setBusy(false);
     }
@@ -208,9 +242,7 @@ export default function BillingPanel() {
       if (json?.type === "LIFETIME") {
         alert("Cupom vitalício aplicado! ✅");
       } else {
-        alert(
-          `Cupom aplicado! Trial até: ${fmtDateBR(json?.trial_ends_at || null)}`
-        );
+        alert(`Cupom aplicado! Trial até: ${fmtDateBR(json?.trial_ends_at || null)}`);
       }
 
       await loadTenantBilling(tenantId);
@@ -234,14 +266,14 @@ export default function BillingPanel() {
 
         <div className="flex gap-2 flex-wrap">
           <button
-            className="border px-3 py-2 rounded-xl text-sm font-semibold bg-white hover:bg-slate-50"
+            className="border px-3 py-2 rounded-xl text-sm font-semibold bg-white hover:bg-slate-50 min-h-[44px]"
             onClick={handleBack}
           >
             ← Voltar
           </button>
 
           <button
-            className="border px-3 py-2 rounded-xl text-sm font-semibold bg-white hover:bg-slate-50"
+            className="border px-3 py-2 rounded-xl text-sm font-semibold bg-white hover:bg-slate-50 min-h-[44px]"
             onClick={() => tenantId && loadTenantBilling(tenantId)}
           >
             Atualizar status
@@ -263,17 +295,13 @@ export default function BillingPanel() {
 
           <div>
             <div className="text-xs text-slate-600">Trial até</div>
-            <div className="font-semibold">
-              {fmtDateBR(tenant?.trial_ends_at || null)}
-            </div>
+            <div className="font-semibold">{fmtDateBR(tenant?.trial_ends_at || null)}</div>
           </div>
 
           <div>
             <div className="text-xs text-slate-600">Próximo vencimento</div>
             <div className="font-semibold">
-              {isLifetime
-                ? "Vitalícia"
-                : fmtDateBR(tenant?.current_period_end || null)}
+              {isLifetime ? "Vitalícia" : fmtDateBR(tenant?.current_period_end || null)}
             </div>
           </div>
         </div>
@@ -287,9 +315,7 @@ export default function BillingPanel() {
             Assinatura ativa ✅
           </div>
         ) : isTrial ? (
-          <div className="mt-3 text-sm text-sky-700 font-semibold">
-            Trial ativo ✅
-          </div>
+          <div className="mt-3 text-sm text-sky-700 font-semibold">Trial ativo ✅</div>
         ) : (
           <div className="mt-3 text-sm text-amber-800">
             Assinatura inativa. Assine para liberar o acesso.
@@ -305,12 +331,12 @@ export default function BillingPanel() {
             value={promo}
             onChange={(e) => setPromo(e.target.value)}
             placeholder="Ex: PROMO7 ou CUPOMFAMILIA"
-            className="border rounded-xl px-3 py-2 text-sm w-full sm:w-56"
+            className="border rounded-xl px-3 py-2 text-sm w-full sm:w-56 min-h-[44px]"
           />
           <button
             onClick={applyPromo}
             disabled={promoBusy}
-            className="border px-4 py-2 rounded-xl text-sm font-semibold bg-white hover:bg-slate-50"
+            className="border px-4 py-2 rounded-xl text-sm font-semibold bg-white hover:bg-slate-50 min-h-[44px] w-full sm:w-auto"
           >
             {promoBusy ? "Aplicando..." : "Aplicar cupom"}
           </button>
@@ -321,14 +347,23 @@ export default function BillingPanel() {
       </div>
 
       {/* CHECKOUT */}
-      <div className="mt-6 flex flex-wrap gap-2">
+      <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-2">
         <button
-          onClick={openCheckout}
+          onClick={() => openCheckoutFixed("MONTHLY")}
           disabled={busy || isLifetime}
-          className="bg-black text-white px-5 py-2 rounded-xl text-sm font-semibold disabled:opacity-60 w-full sm:w-auto"
+          className="bg-black text-white px-5 py-2 rounded-xl text-sm font-semibold disabled:opacity-60 min-h-[44px] w-full"
           title={isLifetime ? "Assinatura vitalícia não precisa checkout" : ""}
         >
-          {busy ? "Abrindo..." : isLifetime ? "Vitalícia ativa" : "Assinar agora (Asaas)"}
+          {busy ? "Abrindo..." : isLifetime ? "Vitalícia ativa" : "Assinar Mensal"}
+        </button>
+
+        <button
+          onClick={() => openCheckoutFixed("YEARLY")}
+          disabled={busy || isLifetime}
+          className="bg-slate-900 text-white px-5 py-2 rounded-xl text-sm font-semibold disabled:opacity-60 min-h-[44px] w-full"
+          title={isLifetime ? "Assinatura vitalícia não precisa checkout" : ""}
+        >
+          {busy ? "Abrindo..." : isLifetime ? "Vitalícia ativa" : "Assinar Anual"}
         </button>
       </div>
 

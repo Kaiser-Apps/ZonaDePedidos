@@ -45,6 +45,10 @@ type TenantBilling = {
   trial_ends_at: string | null;
   current_period_end: string | null;
   plan: string | null;
+
+  // ✅ novos campos para tolerância
+  past_due_since?: string | null;
+  grace_days?: number | null;
 };
 
 function isTrialValid(trialEndsAt: string | null) {
@@ -53,10 +57,27 @@ function isTrialValid(trialEndsAt: string | null) {
   return !Number.isNaN(d.getTime()) && Date.now() <= d.getTime();
 }
 
+function isWithinGrace(pastDueSince: string | null | undefined, graceDays: number) {
+  if (!pastDueSince) return false;
+  const start = new Date(pastDueSince).getTime();
+  if (Number.isNaN(start)) return false;
+  const ms = graceDays * 24 * 60 * 60 * 1000;
+  return Date.now() <= start + ms;
+}
+
 function isAccessAllowed(t: TenantBilling | null) {
   const st = (t?.subscription_status || "INACTIVE").toUpperCase();
+
   if (st === "ACTIVE") return true;
+
   if (st === "TRIAL") return isTrialValid(t?.trial_ends_at || null);
+
+  // ✅ tolerância para atraso
+  if (st === "PAST_DUE") {
+    const grace = typeof t?.grace_days === "number" && t.grace_days >= 0 ? t.grace_days : 3;
+    return isWithinGrace(t?.past_due_since || null, grace);
+  }
+
   return false;
 }
 
@@ -68,8 +89,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
 
   const [loading, setLoading] = useState(true);
-  const [tenantBilling, setTenantBilling] =
-    useState<TenantBilling | null>(null);
+  const [tenantBilling, setTenantBilling] = useState<TenantBilling | null>(null);
 
   // menu mobile
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -124,8 +144,6 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
         if (profErr) {
           console.log("[LAYOUT] profiles error:", profErr);
-
-          // se for RLS/sem permissão, é melhor forçar relogin pra não travar
           router.replace("/login");
           return;
         }
@@ -140,19 +158,28 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         const { data: tenant, error: tenErr } = await supabase
           .from("tenants")
           .select(
-            "id, subscription_status, trial_ends_at, current_period_end, plan"
+            "id, subscription_status, trial_ends_at, current_period_end, plan, past_due_since, grace_days"
           )
           .eq("id", profile.tenant_id)
           .maybeSingle();
 
         if (tenErr) {
           console.log("[LAYOUT] tenants error:", tenErr);
-          // ainda assim não trava, só segue sem billing
           setTenantBilling(null);
           return;
         }
 
-        setTenantBilling((tenant as TenantBilling) || null);
+        const t = (tenant as TenantBilling) || null;
+        setTenantBilling(t);
+
+        // ✅ BLOQUEIO: se não tiver acesso, manda pra /assinatura (mas evita loop)
+        if (!pathname?.startsWith("/assinatura")) {
+          const allowed = isAccessAllowed(t);
+          if (!allowed) {
+            router.replace("/assinatura");
+            return;
+          }
+        }
       } catch (e) {
         console.log("[LAYOUT] unexpected:", e);
         router.replace("/login");
@@ -164,7 +191,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     };
 
     run();
-  }, [router]);
+    // inclui pathname pra bloquear ao trocar de rota dentro do app
+  }, [router, pathname]);
 
   const logout = async () => {
     await supabase.auth.signOut();
@@ -180,11 +208,14 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   }
 
   const st = (tenantBilling?.subscription_status || "INACTIVE").toUpperCase();
+
   const badge =
     st === "ACTIVE"
       ? { cls: "bg-emerald-50 text-emerald-700 border-emerald-200", text: "Ativa" }
       : st === "TRIAL"
       ? { cls: "bg-sky-50 text-sky-700 border-sky-200", text: "Trial" }
+      : st === "PAST_DUE"
+      ? { cls: "bg-amber-50 text-amber-800 border-amber-200", text: "Em atraso" }
       : { cls: "bg-amber-50 text-amber-800 border-amber-200", text: "Inativa" };
 
   return (
