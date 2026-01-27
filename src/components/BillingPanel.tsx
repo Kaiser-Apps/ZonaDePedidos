@@ -38,6 +38,9 @@ export default function BillingPanel() {
   const [promo, setPromo] = useState("");
   const [promoBusy, setPromoBusy] = useState(false);
 
+  // ✅ aparece "Começar" somente quando ativou AGORA (cupom/pagamento)
+  const [justActivated, setJustActivated] = useState(false);
+
   const mensalUrl = useMemo(
     () => (process.env.NEXT_PUBLIC_ASAAS_LINK_MENSAL || "").trim(),
     []
@@ -63,6 +66,30 @@ export default function BillingPanel() {
     () => status === "TRIAL" && trialValid(tenant?.trial_ends_at || null),
     [status, tenant]
   );
+
+  const isInactive = useMemo(() => status === "INACTIVE", [status]);
+
+  // ✅ "novo" = INACTIVE e sem datas
+  const isBrandNew = useMemo(() => {
+    return isInactive && !tenant?.trial_ends_at && !tenant?.current_period_end;
+  }, [isInactive, tenant]);
+
+  // ✅ regra de botões (conforme você pediu):
+  // - Tenant novo (INACTIVE e sem datas): não aparece nada.
+  // - Tenant já teve algo (trial, ativo, vencimento etc): aparece ← Voltar (como hoje)
+  // - Tenant após aplicar cupom ou ativar o plano AGORA: aparece Começar → e leva pra HOME (pedidos)
+  const showStart = useMemo(() => {
+    return justActivated;
+  }, [justActivated]);
+
+  const showBack = useMemo(() => {
+    return !isBrandNew && !justActivated;
+  }, [isBrandNew, justActivated]);
+
+  const handleStart = () => {
+    // ✅ seu "pedidos" hoje está na HOME (app/page.tsx)
+    router.push("/");
+  };
 
   const loadTenantBilling = async (tId: string) => {
     console.log("[BILLING] load tenant billing", tId);
@@ -133,8 +160,7 @@ export default function BillingPanel() {
   }, []);
 
   const handleBack = () => {
-    // Volta para a tela anterior se existir histórico; senão tenta /pedidos e,
-    // se não existir, cai para /
+    // Volta para a tela anterior se existir histórico; senão cai para HOME
     try {
       if (typeof window !== "undefined" && window.history.length > 1) {
         router.back();
@@ -144,20 +170,7 @@ export default function BillingPanel() {
       console.log("[BILLING] handleBack history check error:", e);
     }
 
-    // fallback robusto (evita 404 no localhost)
-    (async () => {
-      try {
-        const res = await fetch("/pedidos", { method: "HEAD" });
-        if (res.ok) {
-          router.push("/pedidos");
-        } else {
-          router.push("/");
-        }
-      } catch (e) {
-        console.log("[BILLING] handleBack HEAD /pedidos error:", e);
-        router.push("/");
-      }
-    })();
+    router.push("/");
   };
 
   const ensureBillingEmail = async (plan: "MONTHLY" | "YEARLY") => {
@@ -202,6 +215,12 @@ export default function BillingPanel() {
     setBusy(true);
     try {
       await ensureBillingEmail(plan);
+
+      // ✅ abriu checkout: ainda NÃO marcamos justActivated
+      // (ativação real acontece no webhook)
+      // quando você implementar uma rota de "retorno" do checkout,
+      // você pode marcar justActivated lá.
+
       window.open(url, "_blank", "noopener,noreferrer");
     } finally {
       setBusy(false);
@@ -246,6 +265,10 @@ export default function BillingPanel() {
       }
 
       await loadTenantBilling(tenantId);
+
+      // ✅ marcou ativação "AGORA" (para aparecer Começar)
+      setJustActivated(true);
+
       setPromo("");
     } finally {
       setPromoBusy(false);
@@ -265,12 +288,22 @@ export default function BillingPanel() {
         </div>
 
         <div className="flex gap-2 flex-wrap">
-          <button
-            className="border px-3 py-2 rounded-xl text-sm font-semibold bg-white hover:bg-slate-50 min-h-[44px]"
-            onClick={handleBack}
-          >
-            ← Voltar
-          </button>
+          {showStart ? (
+            <button
+              className="bg-black text-white px-3 py-2 rounded-xl text-sm font-semibold hover:opacity-90 min-h-[44px]"
+              onClick={handleStart}
+              title="Ir para Pedidos"
+            >
+              Começar →
+            </button>
+          ) : showBack ? (
+            <button
+              className="border px-3 py-2 rounded-xl text-sm font-semibold bg-white hover:bg-slate-50 min-h-[44px]"
+              onClick={handleBack}
+            >
+              ← Voltar
+            </button>
+          ) : null}
 
           <button
             className="border px-3 py-2 rounded-xl text-sm font-semibold bg-white hover:bg-slate-50 min-h-[44px]"
@@ -336,7 +369,7 @@ export default function BillingPanel() {
           <button
             onClick={applyPromo}
             disabled={promoBusy}
-            className="border px-4 py-2 rounded-xl text-sm font-semibold bg-white hover:bg-slate-50 min-h-[44px] w-full sm:w-auto"
+            className="border px-4 py-2 rounded-xl text-sm font-semibold bg-white hover:bg-slate-50 min-h-[44px] w-full sm:w-auto disabled:opacity-60"
           >
             {promoBusy ? "Aplicando..." : "Aplicar cupom"}
           </button>
