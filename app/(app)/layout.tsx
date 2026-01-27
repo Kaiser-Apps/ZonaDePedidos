@@ -91,6 +91,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [tenantBilling, setTenantBilling] = useState<TenantBilling | null>(null);
 
+  // ✅ admin
+  const [isAdmin, setIsAdmin] = useState(false);
+
   // menu mobile
   const [mobileOpen, setMobileOpen] = useState(false);
 
@@ -108,8 +111,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const run = async () => {
       try {
-        const { data: sessionData, error: sessErr } =
-          await supabase.auth.getSession();
+        const { data: sessionData, error: sessErr } = await supabase.auth.getSession();
 
         if (sessErr) {
           console.log("[LAYOUT] getSession error:", sessErr);
@@ -135,10 +137,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           return;
         }
 
-        // ✅ AQUI era o seu 406: trocamos single() -> maybeSingle()
+        // ✅ pega tenant_id + role
         const { data: profile, error: profErr } = await supabase
           .from("profiles")
-          .select("tenant_id")
+          .select("tenant_id, role")
           .eq("user_id", userId)
           .maybeSingle();
 
@@ -154,6 +156,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           router.replace("/login");
           return;
         }
+
+        // ✅ seta admin
+        const role = String(profile?.role || "").toLowerCase();
+        setIsAdmin(role === "admin");
 
         const { data: tenant, error: tenErr } = await supabase
           .from("tenants")
@@ -191,7 +197,6 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     };
 
     run();
-    // inclui pathname pra bloquear ao trocar de rota dentro do app
   }, [router, pathname]);
 
   const logout = async () => {
@@ -231,13 +236,27 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               </div>
               <div className="min-w-0">
                 <div className="font-extrabold truncate">Zona de Pedidos</div>
-                <div className="text-xs text-slate-500 truncate">
-                  Painel de gestão
-                </div>
+                <div className="text-xs text-slate-500 truncate">Painel de gestão</div>
               </div>
             </div>
 
             <div className="flex-1" />
+
+            {/* ✅ BOTÃO ADMIN (DESKTOP) - canto direito */}
+            {isAdmin && (
+              <button
+                onClick={() => router.push("/admin/usuarios")}
+                className={[
+                  "hidden sm:inline-flex items-center justify-center",
+                  "min-h-[40px] px-3 py-2 rounded-xl",
+                  "border border-slate-200 bg-white hover:bg-slate-50",
+                  "text-sm font-semibold whitespace-nowrap",
+                ].join(" ")}
+                title="Gerenciar usuários"
+              >
+                Admin
+              </button>
+            )}
 
             {/* DESKTOP ACTIONS */}
             <div className="hidden sm:flex items-center gap-2">
@@ -297,8 +316,25 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           {mobileOpen && (
             <div className="sm:hidden mt-3 border rounded-2xl bg-white shadow-sm p-3">
               <div className="grid gap-2">
+                {/* ✅ BOTÃO ADMIN (MOBILE) */}
+                {isAdmin && (
+                  <button
+                    onClick={() => {
+                      setMobileOpen(false);
+                      router.push("/admin/usuarios");
+                    }}
+                    className="border px-3 py-3 rounded-xl text-sm font-semibold bg-white hover:bg-slate-50 w-full text-left min-h-[44px]"
+                    title="Gerenciar usuários"
+                  >
+                    Admin
+                  </button>
+                )}
+
                 <button
-                  onClick={() => router.push("/assinatura")}
+                  onClick={() => {
+                    setMobileOpen(false);
+                    router.push("/assinatura");
+                  }}
                   className={[
                     "text-sm font-semibold px-3 py-3 rounded-xl border",
                     "min-h-[44px] w-full text-left",
@@ -332,9 +368,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
       {/* CONTENT */}
       <main className="mx-auto max-w-6xl px-4 py-6">
-        <div className="bg-white border rounded-2xl shadow-sm p-4 md:p-6">
-          {children}
-        </div>
+        <div className="bg-white border rounded-2xl shadow-sm p-4 md:p-6">{children}</div>
 
         <footer className="mt-6 text-center text-xs text-slate-500">
           © {new Date().getFullYear()} Zona de Pedidos

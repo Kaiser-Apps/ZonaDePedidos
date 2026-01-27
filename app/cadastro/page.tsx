@@ -28,7 +28,19 @@ export default function CadastroPage() {
     const json = await res.json().catch(() => ({} as any));
 
     if (!res.ok) {
-      console.log("[CADASTRO] register tenant error:", json);
+      console.log("[CADASTRO] register tenant error:", {
+        status: res.status,
+        json,
+      });
+
+      // ✅ quando o backend devolve 409: usuário já possui tenant
+      if (res.status === 409) {
+        throw new Error(
+          json?.message ||
+            "Este e-mail já possui empresa cadastrada. Faça login."
+        );
+      }
+
       throw new Error(json?.message || "Falha ao criar empresa.");
     }
 
@@ -57,10 +69,11 @@ export default function CadastroPage() {
     try {
       console.log("[CADASTRO] signUp", { email: e, tenantName });
 
-      const { data: signUpData, error: signUpErr } = await supabase.auth.signUp({
-        email: e,
-        password: senha,
-      });
+      const { data: signUpData, error: signUpErr } =
+        await supabase.auth.signUp({
+          email: e,
+          password: senha,
+        });
 
       if (signUpErr) {
         console.log("[CADASTRO] signUp error:", signUpErr);
@@ -73,12 +86,15 @@ export default function CadastroPage() {
       let accessToken = signUpData.session?.access_token || null;
 
       if (!accessToken) {
-        console.log("[CADASTRO] no session after signUp, trying signInWithPassword...");
+        console.log(
+          "[CADASTRO] no session after signUp, trying signInWithPassword..."
+        );
 
-        const { data: signInData, error: signInErr } = await supabase.auth.signInWithPassword({
-          email: e,
-          password: senha,
-        });
+        const { data: signInData, error: signInErr } =
+          await supabase.auth.signInWithPassword({
+            email: e,
+            password: senha,
+          });
 
         if (signInErr || !signInData.session?.access_token) {
           console.log("[CADASTRO] signIn after signUp error:", signInErr);
@@ -93,7 +109,26 @@ export default function CadastroPage() {
       }
 
       // ✅ cria tenant + profile via API server (service role)
-      await registerTenant(accessToken, tenantName);
+      try {
+        await registerTenant(accessToken, tenantName);
+      } catch (e: any) {
+        const msg = String(e?.message || e);
+
+        // ✅ se já existe tenant para esse usuário, manda pro login
+        if (
+          msg.toLowerCase().includes("já possui empresa") ||
+          msg.toLowerCase().includes("ja possui empresa") ||
+          msg.toLowerCase().includes("faça login") ||
+          msg.toLowerCase().includes("faca login")
+        ) {
+          alert(msg);
+          router.replace("/login");
+          return;
+        }
+
+        // outro erro
+        throw e;
+      }
 
       alert("Conta criada com sucesso! ✅");
       router.replace("/");
@@ -114,7 +149,9 @@ export default function CadastroPage() {
           </div>
           <div>
             <div className="text-lg font-extrabold">Criar conta</div>
-            <div className="text-xs text-slate-500">Comece a usar o Zona de Pedidos</div>
+            <div className="text-xs text-slate-500">
+              Comece a usar o Zona de Pedidos
+            </div>
           </div>
         </div>
 
