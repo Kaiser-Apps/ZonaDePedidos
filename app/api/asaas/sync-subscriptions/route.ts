@@ -59,6 +59,24 @@ export async function POST() {
             errors.push({ subId: sub.id, customerId: sub.customer, err: 'Erro ao buscar email do cliente' });
           }
         }
+
+        // Buscar nome do link de pagamento, se houver paymentLink/paymentLinkId
+        let payment_link_name = null;
+        const paymentLinkId = sub.paymentLink || sub.paymentLinkId || null;
+        if (paymentLinkId) {
+          try {
+            const linkRes = await fetch(`${ASAAS_BASE_URL}/v3/paymentLinks/${paymentLinkId}`, {
+              headers: { "access_token": ASAAS_API_KEY },
+            });
+            if (linkRes.ok) {
+              const linkJson = await linkRes.json();
+              payment_link_name = linkJson.name || linkJson.description || null;
+            }
+          } catch (e) {
+            errors.push({ subId: sub.id, paymentLinkId, err: 'Erro ao buscar nome do link' });
+          }
+        }
+
         const { error: upErr } = await supabase
           .from("asaas_subscriptions")
           .upsert({
@@ -70,6 +88,7 @@ export async function POST() {
             status: sub.status,
             next_due_date: sub.nextDueDate || null,
             last_payment_date: sub.lastInvoiceDate || null,
+            payment_link_name,
             updated_at: new Date().toISOString(),
           }, { onConflict: "asaas_subscription_id" });
         if (!upErr) updated++;
