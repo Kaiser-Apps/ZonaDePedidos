@@ -244,7 +244,7 @@ export async function POST(req: Request) {
       subscriptionCycle: cycle,
       value,
       externalReference: `tenant:${tenant.id}`,
-      notificationEnabled: false,
+      notificationEnabled: true,
     };
 
     const linkResp = await fetch(`${ASAAS_BASE_URL}/v3/paymentLinks`, {

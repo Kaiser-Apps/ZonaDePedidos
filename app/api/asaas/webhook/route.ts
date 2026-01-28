@@ -15,6 +15,7 @@ export async function POST(req: Request) {
 
     const event = String(body?.event || "");
     console.log("[ASAAS WEBHOOK] event:", event);
+    console.log("[ASAAS WEBHOOK] full body:", JSON.stringify(body, null, 2));
 
     const payment = body?.payment || null;
     const subscription = body?.subscription || null;
@@ -25,6 +26,8 @@ export async function POST(req: Request) {
       subscription?.externalReference ||
       body?.paymentLink?.externalReference ||
       null;
+    
+    console.log("[ASAAS WEBHOOK] externalReference found:", externalReference);
 
     const asaasSubscriptionId = payment?.subscription || subscription?.id || null;
     const asaasCustomerId = payment?.customer || subscription?.customer || null;
