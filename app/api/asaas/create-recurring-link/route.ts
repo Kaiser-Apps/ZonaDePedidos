@@ -138,19 +138,28 @@ export async function POST(req: Request) {
         return jsonError("Asaas não retornou customer id", 502, { asaas: custJson });
       }
 
-      // Salva customer ID no tenant
+      // Salva customer ID no tenant com confirmação
       console.log("[ASAAS] attempting to save customer ID:", { tenantId, asaasCustomerId });
-      const { error: upErr, data: upData } = await supabaseAdmin
+      const { error: upErr, data: upData, status: upStatus } = await supabaseAdmin
         .from("tenants")
         .update({ asaas_customer_id: asaasCustomerId })
-        .eq("id", tenantId);
+        .eq("id", tenantId)
+        .select("id, asaas_customer_id")
+        .single();
+
+      console.log("[ASAAS] update response:", { status: upStatus, error: upErr, data: upData });
 
       if (upErr) {
-        console.log("[ASAAS] failed saving asaas_customer_id:", upErr);
-        return jsonError("Falha ao salvar customer no tenant", 500, { error: upErr });
+        console.log("[ASAAS] CRITICAL: failed saving asaas_customer_id:", { upErr, tenantId, asaasCustomerId });
+        return jsonError("Falha ao salvar customer no tenant", 500, { error: upErr, details: "Update falhou" });
       }
 
-      console.log("[ASAAS] customer created and saved:", { tenantId, asaasCustomerId, upData });
+      if (!upData?.asaas_customer_id) {
+        console.log("[ASAAS] WARNING: update succeeded but asaas_customer_id not confirmed:", { upData });
+        return jsonError("Falha ao confirmar customer ID no tenant", 500, { details: "Update não persistiu" });
+      }
+
+      console.log("[ASAAS] ✅ customer created and saved successfully:", { tenantId, asaasCustomerId, savedId: upData.asaas_customer_id });
     }
 
     let body: Body = {};
