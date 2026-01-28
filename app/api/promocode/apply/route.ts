@@ -37,7 +37,7 @@ export async function POST(req: Request) {
       .map((s) => s.trim().toLowerCase())
       .filter(Boolean);
 
-    const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+    const supabaseAdmin = createClient(SUPABASE_URL!, SUPABASE_SERVICE_ROLE_KEY!, {
       auth: { persistSession: false },
     });
 

@@ -42,7 +42,7 @@ export async function POST(req: Request) {
     if (!ASAAS_LINK_MENSAL || !ASAAS_LINK_ANUAL)
       return jsonError("Links do Asaas (NEXT_PUBLIC_ASAAS_LINK_MENSAL/ANUAL) não configurados", 500);
 
-    const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+    const supabaseAdmin = createClient(SUPABASE_URL!, SUPABASE_SERVICE_ROLE_KEY!, {
       auth: { persistSession: false },
     });
 

@@ -77,7 +77,7 @@ export async function POST(req: Request) {
       return jsonError("SUPABASE_SERVICE_ROLE_KEY ausente no env", 500);
     }
 
-    const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+    const supabaseAdmin = createClient(SUPABASE_URL!, SUPABASE_SERVICE_ROLE_KEY!, {
       auth: { persistSession: false },
     });
 
