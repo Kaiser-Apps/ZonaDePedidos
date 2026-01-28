@@ -20,43 +20,33 @@ export async function POST(req: Request) {
     const payment = body?.payment || null;
     const subscription = body?.subscription || null;
 
-    // melhor: externalReference = tenantId
-    const externalReference =
-      payment?.externalReference ||
-      subscription?.externalReference ||
-      body?.paymentLink?.externalReference ||
-      null;
-    
-    console.log("[ASAAS WEBHOOK] externalReference found:", externalReference);
-
-    const asaasSubscriptionId = payment?.subscription || subscription?.id || null;
+    // Extrai IDs disponíveis
     const asaasCustomerId = payment?.customer || subscription?.customer || null;
+    const asaasSubscriptionId = payment?.subscription || subscription?.id || null;
 
-    let tenantId: string | null = externalReference ? String(externalReference) : null;
+    console.log("[ASAAS WEBHOOK] asaasCustomerId:", asaasCustomerId);
+    console.log("[ASAAS WEBHOOK] asaasSubscriptionId:", asaasSubscriptionId);
 
-    // fallback: tenta achar por subscription/customer
-    if (!tenantId && asaasSubscriptionId) {
-      const { data } = await supabaseAdmin
-        .from("tenants")
-        .select("id")
-        .eq("asaas_subscription_id", String(asaasSubscriptionId))
-        .single();
-      tenantId = data?.id || null;
-    }
-
-    if (!tenantId && asaasCustomerId) {
-      const { data } = await supabaseAdmin
-        .from("tenants")
-        .select("id")
-        .eq("asaas_customer_id", String(asaasCustomerId))
-        .single();
-      tenantId = data?.id || null;
-    }
-
-    if (!tenantId) {
-      console.log("[ASAAS WEBHOOK] tenantId não encontrado. body:", body);
+    if (!asaasCustomerId) {
+      console.log("[ASAAS WEBHOOK] ⚠️ customer ID não encontrado. body:", body);
       return Response.json({ received: true });
     }
+
+    // Procura tenant pelo asaas_customer_id
+    const { data: tenant } = await supabaseAdmin
+      .from("tenants")
+      .select("id")
+      .eq("asaas_customer_id", String(asaasCustomerId))
+      .maybeSingle();
+
+    let tenantId: string | null = tenant?.id || null;
+
+    if (!tenantId) {
+      console.log("[ASAAS WEBHOOK] ⚠️ tenantId não encontrado para asaas_customer_id:", asaasCustomerId);
+      return Response.json({ received: true });
+    }
+
+    console.log("[ASAAS WEBHOOK] ✅ tenant encontrado:", tenantId);
 
     let newStatus: string | null = null;
     let periodEnd: string | null = null;
@@ -92,12 +82,9 @@ export async function POST(req: Request) {
     const patch: any = {};
     if (newStatus) patch.subscription_status = newStatus;
     if (periodEnd !== undefined) patch.current_period_end = periodEnd;
-    if (asaasCustomerId) patch.asaas_customer_id = String(asaasCustomerId);
-    if (asaasSubscriptionId) patch.asaas_subscription_id = String(asaasSubscriptionId);
 
     if (newStatus === "ACTIVE") {
       patch.plan = "paid";
-      // se pagou, zera trial (recomendado)
       patch.trial_ends_at = null;
     }
 

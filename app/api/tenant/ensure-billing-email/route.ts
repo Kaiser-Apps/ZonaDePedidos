@@ -57,11 +57,9 @@ export async function POST(req: Request) {
       body = {};
     }
 
-    const plan =
-      body?.plan === "YEARLY" ? "yearly" : body?.plan === "MONTHLY" ? "monthly" : null;
-
+    // ✅ Só atualiza billing_email, NÃO atualiza plan
+    // (plan é atualizado apenas pelo webhook quando pagamento é recebido)
     const updateData: any = { billing_email: email };
-    if (plan) updateData.plan = plan;
 
     const { error: upErr } = await supabaseAdmin
       .from("tenants")
@@ -75,7 +73,7 @@ export async function POST(req: Request) {
       });
     }
 
-    return NextResponse.json({ ok: true, tenantId, billing_email: email, plan });
+    return NextResponse.json({ ok: true, tenantId, billing_email: email });
   } catch (err: any) {
     return jsonError("Erro inesperado", 500, {
       message: String(err?.message || err),

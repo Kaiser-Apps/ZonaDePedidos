@@ -3,9 +3,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
 type Body = {
-  planName?: string; // nome do plano (opcional)
-  value?: number; // valor (opcional)
-  cycle?: "MONTHLY" | "YEARLY"; // ciclo (opcional)
+  cycle?: "MONTHLY" | "YEARLY"; // ciclo (MONTHLY ou YEARLY)
 };
 
 function jsonError(message: string, status = 400, extra?: any) {
@@ -24,54 +22,25 @@ function resolveAsaasBaseUrl() {
   return "https://api.asaas.com";
 }
 
-function normalizeAsaasApiKey(raw: string | undefined | null) {
-  return String(raw || "").trim();
-}
-
-async function safeReadJson(resp: Response) {
-  const ct = resp.headers.get("content-type") || "";
-  if (ct.includes("application/json")) {
-    return resp.json().catch(() => ({}));
-  }
-  const text = await resp.text().catch(() => "");
-  try {
-    return JSON.parse(text);
-  } catch {
-    return { raw: text };
-  }
-}
-
-function firstAsaasErrorDescription(asaasBody: any) {
-  const desc =
-    asaasBody?.errors?.[0]?.description ||
-    asaasBody?.errors?.[0]?.message ||
-    null;
-  return typeof desc === "string" && desc.trim() ? desc.trim() : null;
-}
-
-function maskKey(key: string) {
-  const k = String(key || "");
-  if (!k) return "";
-  if (k.length <= 10) return "***";
-  return `${k.slice(0, 10)}***${k.slice(-6)}`;
-}
-
 export async function POST(req: Request) {
   const startedAt = Date.now();
 
   try {
     const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-    const ASAAS_BASE_URL = resolveAsaasBaseUrl();
-    const ASAAS_API_KEY = normalizeAsaasApiKey(process.env.ASAAS_API_KEY);
-    const ASAAS_ENV = (process.env.ASAAS_ENV || "").toLowerCase().trim();
+    const ASAAS_API_KEY = (process.env.ASAAS_API_KEY || "").trim();
+    
+    const ASAAS_LINK_MENSAL = (process.env.NEXT_PUBLIC_ASAAS_LINK_MENSAL || "").trim();
+    const ASAAS_LINK_ANUAL = (process.env.NEXT_PUBLIC_ASAAS_LINK_ANUAL || "").trim();
 
     if (!SUPABASE_URL)
       return jsonError("NEXT_PUBLIC_SUPABASE_URL ausente no env", 500);
     if (!SUPABASE_SERVICE_ROLE_KEY)
       return jsonError("SUPABASE_SERVICE_ROLE_KEY ausente no env", 500);
-    if (!ASAAS_API_KEY) return jsonError("ASAAS_API_KEY ausente no env", 500);
+    if (!ASAAS_API_KEY)
+      return jsonError("ASAAS_API_KEY ausente no env", 500);
+    if (!ASAAS_LINK_MENSAL || !ASAAS_LINK_ANUAL)
+      return jsonError("Links do Asaas (NEXT_PUBLIC_ASAAS_LINK_MENSAL/ANUAL) não configurados", 500);
 
     const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
       auth: { persistSession: false },
@@ -84,80 +53,103 @@ export async function POST(req: Request) {
 
     if (!jwt) return jsonError("Authorization Bearer token ausente", 401);
 
-    // ✅ Logs pra confirmar a key REAL em runtime (sem expor)
-    console.log("[ASAAS] baseUrl:", ASAAS_BASE_URL);
-    console.log("[ASAAS] ASAAS_ENV:", ASAAS_ENV);
-    console.log("[ASAAS] apiKey masked:", maskKey(ASAAS_API_KEY));
-    console.log("[ASAAS] apiKey length:", ASAAS_API_KEY.length);
-    console.log("[ASAAS] env supabase host:", new URL(SUPABASE_URL).host);
-
-    const { data: userResp, error: userErr } = await supabaseAdmin.auth.getUser(
-      jwt
-    );
+    const { data: userResp, error: userErr } = await supabaseAdmin.auth.getUser(jwt);
     if (userErr || !userResp?.user?.id) {
       console.log("[ASAAS] auth.getUser error:", userErr);
       return jsonError("Token inválido ou sessão expirada", 401);
     }
 
     const userId = userResp.user.id;
-    console.log("[ASAAS] userId:", userId);
+    const userEmail = userResp.user.email || "";
+    
+    console.log("[ASAAS] userId:", userId, "email:", userEmail);
 
-    const { data: prof, error: profErr, count: profCount } =
-      await supabaseAdmin
-        .from("profiles")
-        .select("tenant_id", { count: "exact" })
-        .eq("user_id", userId)
-        .maybeSingle();
-
-    console.log("[ASAAS] profiles count for user:", {
-      profCount,
-      profCountErr: profErr || null,
-    });
+    const { data: prof, error: profErr } = await supabaseAdmin
+      .from("profiles")
+      .select("tenant_id")
+      .eq("user_id", userId)
+      .maybeSingle();
 
     if (profErr || !prof?.tenant_id) {
       console.log("[ASAAS] profile error:", profErr);
-      return jsonError("Usuário sem tenant vinculado (profiles.tenant_id)", 400);
+      return jsonError("Usuário sem tenant vinculado", 400);
     }
 
     const tenantId = String(prof.tenant_id);
     console.log("[ASAAS] user -> tenant resolved", { userId, tenantId });
 
+    // Carrega tenant para verificar se já tem customer
     const { data: tenant, error: tErr } = await supabaseAdmin
       .from("tenants")
-      .select(
-        "id, name, cnpj, phone, endereco, asaas_customer_id, asaas_recurring_link_id, asaas_recurring_link_url"
-      )
+      .select("id, name, cnpj, phone, asaas_customer_id, subscription_status")
       .eq("id", tenantId)
       .maybeSingle();
 
-    if (tErr) {
+    if (tErr || !tenant) {
       console.log("[ASAAS] tenant load error:", { tenantId, tErr });
-      return jsonError("Erro ao carregar tenant no Supabase", 500, {
-        code: tErr.code,
-        message: tErr.message,
-      });
-    }
-
-    if (!tenant) {
-      console.log("[ASAAS] tenant not found:", { tenantId });
       return jsonError("Tenant não encontrado", 404);
     }
 
-    if (tenant.asaas_recurring_link_id && tenant.asaas_recurring_link_url) {
-      console.log("[ASAAS] reusing existing link:", {
-        tenantId,
-        linkId: tenant.asaas_recurring_link_id,
+    // Proteção: se já está ACTIVE, não precisa de novo link
+    if (tenant.subscription_status === "ACTIVE") {
+      console.log("[ASAAS] tenant já está ativo:", tenantId);
+      return jsonError("Sua assinatura já está ativa", 400);
+    }
+
+    let asaasCustomerId = tenant.asaas_customer_id || null;
+
+    // Se não tiver customer, cria um no Asaas
+    if (!asaasCustomerId) {
+      console.log("[ASAAS] creating customer for tenant...");
+
+      const ASAAS_BASE_URL = resolveAsaasBaseUrl();
+      
+      const customerPayload: any = {
+        name: tenant.name || "Cliente",
+        email: userEmail,
+        cpfCnpj: tenant.cnpj || undefined,
+        phone: tenant.phone || undefined,
+        externalReference: `tenant:${tenantId}`,
+      };
+
+      const custResp = await fetch(`${ASAAS_BASE_URL}/v3/customers`, {
+        method: "POST",
+        headers: {
+          "Accept": "application/json",
+          "Content-Type": "application/json",
+          "access_token": ASAAS_API_KEY,
+        },
+        body: JSON.stringify(customerPayload),
       });
 
-      return NextResponse.json({
-        ok: true,
-        tenantId,
-        asaas_customer_id: tenant.asaas_customer_id || null,
-        linkId: tenant.asaas_recurring_link_id,
-        url: tenant.asaas_recurring_link_url,
-        ms: Date.now() - startedAt,
-        reused: true,
-      });
+      const custJson = await custResp.json().catch(() => ({}));
+
+      if (!custResp.ok) {
+        console.log("[ASAAS] create customer failed:", {
+          status: custResp.status,
+          body: custJson,
+        });
+        return jsonError("Falha ao criar customer no Asaas", 502, { asaas: custJson });
+      }
+
+      asaasCustomerId = custJson?.id || null;
+      if (!asaasCustomerId) {
+        console.log("[ASAAS] create customer no id:", custJson);
+        return jsonError("Asaas não retornou customer id", 502, { asaas: custJson });
+      }
+
+      // Salva customer ID no tenant
+      const { error: upErr } = await supabaseAdmin
+        .from("tenants")
+        .update({ asaas_customer_id: asaasCustomerId })
+        .eq("id", tenantId);
+
+      if (upErr) {
+        console.log("[ASAAS] failed saving asaas_customer_id:", upErr);
+        return jsonError("Falha ao salvar customer no tenant", 500);
+      }
+
+      console.log("[ASAAS] customer created:", asaasCustomerId);
     }
 
     let body: Body = {};
@@ -167,149 +159,19 @@ export async function POST(req: Request) {
       body = {};
     }
 
-    const planName = (body.planName || "Assinatura Zona de Pedidos").trim();
-    const value =
-      typeof body.value === "number" && body.value > 0 ? body.value : 39.9;
     const cycle = body.cycle || "MONTHLY";
+    const paymentLink = cycle === "YEARLY" ? ASAAS_LINK_ANUAL : ASAAS_LINK_MENSAL;
 
-    // 1) Garante customer no Asaas
-    let asaasCustomerId = (tenant.asaas_customer_id as string | null) || null;
-
-    if (!asaasCustomerId) {
-      console.log("[ASAAS] creating customer for tenant...");
-
-      const customerPayload: any = {
-        name: tenant.name || "Tenant",
-        phone: tenant.phone || undefined,
-        cpfCnpj: tenant.cnpj || undefined,
-        externalReference: `tenant:${tenant.id}`,
-      };
-
-      const custResp = await fetch(`${ASAAS_BASE_URL}/v3/customers`, {
-        method: "POST",
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/json",
-          access_token: ASAAS_API_KEY,
-        },
-        body: JSON.stringify(customerPayload),
-      });
-
-      const custJson = await safeReadJson(custResp);
-
-      if (!custResp.ok) {
-        console.log("[ASAAS] create customer failed:", {
-          status: custResp.status,
-          body: custJson,
-        });
-
-        const msg =
-          firstAsaasErrorDescription(custJson) ||
-          "Falha ao criar customer no Asaas";
-
-        return jsonError(msg, 502, {
-          status: custResp.status,
-          asaas: custJson,
-        });
-      }
-
-      asaasCustomerId = custJson?.id || null;
-      if (!asaasCustomerId) {
-        console.log("[ASAAS] create customer no id:", custJson);
-        return jsonError("Asaas não retornou customer id", 502, { asaas: custJson });
-      }
-
-      const { error: upErr } = await supabaseAdmin
-        .from("tenants")
-        .update({ asaas_customer_id: asaasCustomerId })
-        .eq("id", tenantId);
-
-      if (upErr) {
-        console.log("[ASAAS] failed saving asaas_customer_id:", upErr);
-        return jsonError("Falha ao salvar asaas_customer_id no tenant", 500, {
-          code: upErr.code,
-          message: upErr.message,
-        });
-      }
-    }
-
-    // 2) Cria link recorrente
-    console.log("[ASAAS] creating recurring payment link...", { cycle, value });
-
-    const linkPayload: any = {
-      name: planName,
-      description: `Assinatura (${cycle})`,
-      billingType: "CREDIT_CARD",
-      chargeType: "RECURRENT",
-      subscriptionCycle: cycle,
-      value,
-      externalReference: `tenant:${tenant.id}`,
-      notificationEnabled: true,
-    };
-
-    const linkResp = await fetch(`${ASAAS_BASE_URL}/v3/paymentLinks`, {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        access_token: ASAAS_API_KEY,
-      },
-      body: JSON.stringify(linkPayload),
-    });
-
-    const linkJson = await safeReadJson(linkResp);
-
-    if (!linkResp.ok) {
-      console.log("[ASAAS] create payment link failed:", {
-        status: linkResp.status,
-        body: linkJson,
-        payload: linkPayload,
-      });
-
-      const msg =
-        firstAsaasErrorDescription(linkJson) ||
-        "Falha ao criar link recorrente no Asaas";
-
-      return jsonError(msg, 502, {
-        status: linkResp.status,
-        asaas: linkJson,
-      });
-    }
-
-    const linkId = linkJson?.id || null;
-    const linkUrl = linkJson?.url || null;
-
-    if (!linkId || !linkUrl) {
-      console.log("[ASAAS] payment link missing fields:", linkJson);
-      return jsonError("Asaas não retornou id/url do link", 502, { asaas: linkJson });
-    }
-
-    const { error: saveLinkErr } = await supabaseAdmin
-      .from("tenants")
-      .update({
-        asaas_recurring_link_id: linkId,
-        asaas_recurring_link_url: linkUrl,
-      })
-      .eq("id", tenantId);
-
-    if (saveLinkErr) {
-      console.log("[ASAAS] failed saving link on tenant:", saveLinkErr);
-      return jsonError("Falha ao salvar link recorrente no tenant", 500, {
-        code: saveLinkErr.code,
-        message: saveLinkErr.message,
-      });
-    }
-
-    console.log("[ASAAS] done", { ms: Date.now() - startedAt, tenantId, linkId });
+    console.log("[ASAAS] returning payment link", { tenantId, cycle, asaasCustomerId });
 
     return NextResponse.json({
       ok: true,
       tenantId,
-      asaas_customer_id: asaasCustomerId,
-      linkId,
-      url: linkUrl,
+      asaasCustomerId,
+      email: userEmail,
+      cycle,
+      url: paymentLink,
       ms: Date.now() - startedAt,
-      reused: false,
     });
   } catch (err: any) {
     console.log("[ASAAS] unexpected error:", err);
