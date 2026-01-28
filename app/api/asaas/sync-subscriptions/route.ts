@@ -44,7 +44,21 @@ export async function POST() {
         // Tenta associar ao tenant local
         const tenant = tenantByCustomerId.get(sub.customer);
         const tenant_id = tenant?.id || null;
-        const email = tenant?.billing_email || sub.customer?.email || null;
+        let email = tenant?.billing_email || null;
+        // Se não houver tenant local, busca o e-mail do cliente no Asaas
+        if (!email) {
+          try {
+            const custRes = await fetch(`${ASAAS_BASE_URL}/v3/customers/${sub.customer}`, {
+              headers: { "access_token": ASAAS_API_KEY },
+            });
+            if (custRes.ok) {
+              const custJson = await custRes.json();
+              email = custJson.email || null;
+            }
+          } catch (e) {
+            errors.push({ subId: sub.id, customerId: sub.customer, err: 'Erro ao buscar email do cliente' });
+          }
+        }
         const { error: upErr } = await supabase
           .from("asaas_subscriptions")
           .upsert({
