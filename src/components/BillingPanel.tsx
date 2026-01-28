@@ -214,13 +214,32 @@ export default function BillingPanel() {
 
     setBusy(true);
     try {
+      // ✅ Chama API para criar/obter customer no Asaas (salva asaas_customer_id)
+      const token = await getAccessToken();
+      const apiRes = await fetch("/api/asaas/create-recurring-link", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ cycle: plan }),
+      });
+
+      const apiJson = await apiRes.json().catch(() => ({} as any));
+
+      if (!apiRes.ok) {
+        console.log("[BILLING] create-recurring-link error:", apiJson);
+        const msg = apiJson?.message || "Erro ao preparar link de pagamento.";
+        alert(msg);
+        return;
+      }
+
+      console.log("[BILLING] create-recurring-link success:", apiJson);
+
       await ensureBillingEmail(plan);
 
       // ✅ abriu checkout: ainda NÃO marcamos justActivated
       // (ativação real acontece no webhook)
-      // quando você implementar uma rota de "retorno" do checkout,
-      // você pode marcar justActivated lá.
-
       window.open(url, "_blank", "noopener,noreferrer");
     } finally {
       setBusy(false);
