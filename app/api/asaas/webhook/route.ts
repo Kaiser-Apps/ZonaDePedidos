@@ -2,6 +2,19 @@ import { supabaseAdmin } from "../../../../src/lib/supabaseAdmin";
 
 export const runtime = "nodejs";
 
+function toDateOnly(v?: string | null) {
+  if (!v) return null;
+  // Asaas costuma enviar YYYY-MM-DD
+  const s = String(v);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return null;
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
 function toIsoMaybe(v?: string | null) {
   if (!v) return null;
   const d = new Date(v);
@@ -11,6 +24,21 @@ function toIsoMaybe(v?: string | null) {
 
 export async function POST(req: Request) {
   try {
+    const expectedToken = String(process.env.ASAAS_WEBHOOK_TOKEN || "").trim();
+    if (expectedToken) {
+      const got =
+        req.headers.get("asaas-access-token") ||
+        req.headers.get("x-webhook-token") ||
+        req.headers.get("authorization") ||
+        "";
+
+      const normalized = got.toLowerCase().startsWith("bearer ") ? got.slice(7).trim() : got.trim();
+      if (!normalized || normalized !== expectedToken) {
+        console.log("[ASAAS WEBHOOK] invalid token");
+        return new Response("Unauthorized", { status: 401 });
+      }
+    }
+
     const body = await req.json();
 
     const event = String(body?.event || "");
@@ -51,48 +79,122 @@ export async function POST(req: Request) {
     let newStatus: string | null = null;
     let periodEnd: string | null = null;
 
+    const patch: any = {};
+
     // pagamentos
     if (event === "PAYMENT_RECEIVED" || event === "PAYMENT_CONFIRMED") {
-      newStatus = "ACTIVE";
-      periodEnd = toIsoMaybe(payment?.dueDate) || null;
+      // ⚠️ Alguns cenários disparam eventos sem pagamento efetivo.
+      // Só consideramos pago quando existir paymentDate.
+      const paidAt = toIsoMaybe(payment?.paymentDate) || null;
+      if (paidAt) {
+        newStatus = "ACTIVE";
+        patch.past_due_since = null;
+
+        // não deixa current_period_end virar null (o que parece "vitalícia" na UI)
+        periodEnd = toIsoMaybe(payment?.dueDate) || toIsoMaybe(payment?.creditDate) || null;
+      } else {
+        console.log("[ASAAS WEBHOOK] ignore ACTIVE without paymentDate", {
+          event,
+          paymentId: payment?.id,
+          status: payment?.status,
+          dueDate: payment?.dueDate,
+        });
+        // ainda atualizamos last_invoice_url/last_payment_id mais abaixo
+      }
     }
 
     if (event === "PAYMENT_OVERDUE") {
       newStatus = "PAST_DUE";
       periodEnd = toIsoMaybe(payment?.dueDate) || null;
+      patch.past_due_since = toIsoMaybe(payment?.dueDate) || new Date().toISOString();
     }
 
     if (event === "PAYMENT_DELETED" || event === "PAYMENT_REFUNDED") {
       newStatus = "INACTIVE";
       periodEnd = null;
+      patch.past_due_since = null;
     }
 
     // assinatura (se vier)
+    // ⚠️ IMPORTANTE: status da assinatura no Asaas pode ser ACTIVE mesmo sem pagamento confirmado.
+    // Para evitar liberar o sistema antes do pagamento, NÃO marcamos ACTIVE aqui.
     if (event === "SUBSCRIPTION_CREATED" || event === "SUBSCRIPTION_UPDATED") {
-      const st = String(subscription?.status || "ACTIVE").toUpperCase();
-      newStatus = st === "ACTIVE" ? "ACTIVE" : st;
+      // só atualiza datas se vierem preenchidas
       periodEnd = toIsoMaybe(subscription?.nextDueDate) || null;
+      // mantém subscription_status como está; apenas atualiza datas.
     }
 
     if (event === "SUBSCRIPTION_INACTIVATED" || event === "SUBSCRIPTION_DELETED") {
       newStatus = "INACTIVE";
       periodEnd = null;
+      patch.past_due_since = null;
     }
 
-    const patch: any = {};
-    if (newStatus) patch.subscription_status = newStatus;
-    if (periodEnd !== undefined) patch.current_period_end = periodEnd;
+    // ⚠️ Fonte de verdade: tabela subscriptions.
+    // Não espelha subscription_status/current_period_end em tenants para evitar ativação indevida.
+    const shouldClearPeriodEnd =
+      event === "PAYMENT_DELETED" ||
+      event === "PAYMENT_REFUNDED" ||
+      event === "SUBSCRIPTION_INACTIVATED" ||
+      event === "SUBSCRIPTION_DELETED";
 
     if (newStatus === "ACTIVE") {
-      patch.plan = "paid";
       patch.trial_ends_at = null;
     }
 
-    if (newStatus === "INACTIVE") patch.plan = "free";
+    // Atualiza apenas campos auxiliares no tenant (ex.: tolerância e limpeza de trial)
+    if (Object.keys(patch).length > 0) {
+      console.log("[ASAAS WEBHOOK] update tenant (aux)", tenantId, patch);
+      await supabaseAdmin.from("tenants").update(patch).eq("id", tenantId);
+    }
 
-    console.log("[ASAAS WEBHOOK] update tenant", tenantId, patch);
+    // ✅ Atualiza tabela subscriptions (fonte de verdade) se existir linha vinculada
+    if (asaasSubscriptionId || payment?.subscription) {
+      const subId = String(asaasSubscriptionId || payment?.subscription || "").trim();
+      if (subId) {
+        const updateSub: any = {
+          updated_at: new Date().toISOString(),
+        };
 
-    await supabaseAdmin.from("tenants").update(patch).eq("id", tenantId);
+        if (newStatus) updateSub.status = newStatus;
+        if (periodEnd) updateSub.current_period_end = periodEnd;
+        else if (shouldClearPeriodEnd) updateSub.current_period_end = null;
+        if (payment?.id) updateSub.last_payment_id = String(payment.id);
+        if (payment?.invoiceUrl) updateSub.last_invoice_url = String(payment.invoiceUrl);
+
+        try {
+          await supabaseAdmin.from("subscriptions").update(updateSub).eq("asaas_subscription_id", subId);
+        } catch (err) {
+          console.log("[ASAAS WEBHOOK] subscriptions update skipped/failed:", err);
+        }
+      }
+    }
+
+    // ✅ Upsert do pagamento (para dashboard/relatórios) - se a tabela existir
+    if (payment?.id) {
+      try {
+        await supabaseAdmin.from("asaas_payments").upsert(
+          {
+            asaas_payment_id: String(payment.id),
+            asaas_subscription_id: payment?.subscription ? String(payment.subscription) : null,
+            asaas_customer_id: asaasCustomerId ? String(asaasCustomerId) : null,
+            tenant_id: tenantId,
+            status: payment?.status ? String(payment.status).toUpperCase() : null,
+            billing_type: payment?.billingType ? String(payment.billingType).toUpperCase() : null,
+            value: typeof payment?.value === "number" ? payment.value : payment?.value ? Number(payment.value) : null,
+            net_value:
+              typeof payment?.netValue === "number" ? payment.netValue : payment?.netValue ? Number(payment.netValue) : null,
+            due_date: toDateOnly(payment?.dueDate),
+            payment_date: toDateOnly(payment?.paymentDate),
+            invoice_url: payment?.invoiceUrl ? String(payment.invoiceUrl) : null,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "asaas_payment_id" }
+        );
+      } catch (err) {
+        console.log("[ASAAS WEBHOOK] asaas_payments upsert skipped/failed:", err);
+      }
+    }
 
     // Atualiza/insere assinatura na tabela local
     if (asaasSubscriptionId) {

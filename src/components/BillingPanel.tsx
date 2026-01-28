@@ -10,6 +10,14 @@ type TenantBilling = {
   trial_ends_at: string | null;
   current_period_end: string | null;
   plan: string | null;
+  cnpj: string | null;
+};
+
+type BillingSummary = {
+  received_count: number;
+  received_gross: number;
+  received_net: number;
+  last_payment_date: string | null;
 };
 
 function fmtDateBR(iso: string | null) {
@@ -26,6 +34,42 @@ function trialValid(trialEndsAt: string | null) {
   return Date.now() <= d.getTime();
 }
 
+function onlyDigits(v: string) {
+  return String(v || "").replace(/\D/g, "");
+}
+
+function maskCPF(digits: string) {
+  const d = onlyDigits(digits).slice(0, 11);
+  const a = d.slice(0, 3);
+  const b = d.slice(3, 6);
+  const c = d.slice(6, 9);
+  const e = d.slice(9, 11);
+  if (d.length <= 3) return a;
+  if (d.length <= 6) return `${a}.${b}`;
+  if (d.length <= 9) return `${a}.${b}.${c}`;
+  return `${a}.${b}.${c}-${e}`;
+}
+
+function maskCNPJ(digits: string) {
+  const d = onlyDigits(digits).slice(0, 14);
+  const a = d.slice(0, 2);
+  const b = d.slice(2, 5);
+  const c = d.slice(5, 8);
+  const e = d.slice(8, 12);
+  const f = d.slice(12, 14);
+  if (d.length <= 2) return a;
+  if (d.length <= 5) return `${a}.${b}`;
+  if (d.length <= 8) return `${a}.${b}.${c}`;
+  if (d.length <= 12) return `${a}.${b}.${c}/${e}`;
+  return `${a}.${b}.${c}/${e}-${f}`;
+}
+
+function maskCpfCnpj(value: string) {
+  const d = onlyDigits(value);
+  if (d.length <= 11) return maskCPF(d);
+  return maskCNPJ(d);
+}
+
 export default function BillingPanel() {
   const router = useRouter();
 
@@ -34,21 +78,37 @@ export default function BillingPanel() {
 
   const [tenant, setTenant] = useState<TenantBilling | null>(null);
   const [busy, setBusy] = useState(false);
+  const [planBusy, setPlanBusy] = useState(false);
 
   const [promo, setPromo] = useState("");
   const [promoBusy, setPromoBusy] = useState(false);
 
+  const [cpfCnpj, setCpfCnpj] = useState("");
+  const [billingType, setBillingType] = useState<
+    "UNDEFINED" | "CREDIT_CARD" | "PIX" | "BOLETO"
+  >("UNDEFINED");
+  const planMonthlyName = useMemo(
+    () => (process.env.NEXT_PUBLIC_PLAN_MONTHLY_NAME || "Plano Mensal").trim(),
+    []
+  );
+  const planYearlyName = useMemo(
+    () => (process.env.NEXT_PUBLIC_PLAN_YEARLY_NAME || "Plano Anual").trim(),
+    []
+  );
+  const planMonthlyValue = useMemo(
+    () => (process.env.NEXT_PUBLIC_PLAN_MONTHLY_VALUE || "5.90").trim(),
+    []
+  );
+  const planYearlyValue = useMemo(
+    () => (process.env.NEXT_PUBLIC_PLAN_YEARLY_VALUE || "499.00").trim(),
+    []
+  );
+
+
+  const [summary, setSummary] = useState<BillingSummary | null>(null);
+
   // ✅ aparece "Começar" somente quando ativou AGORA (cupom/pagamento)
   const [justActivated, setJustActivated] = useState(false);
-
-  const mensalUrl = useMemo(
-    () => (process.env.NEXT_PUBLIC_ASAAS_LINK_MENSAL || "").trim(),
-    []
-  );
-  const anualUrl = useMemo(
-    () => (process.env.NEXT_PUBLIC_ASAAS_LINK_ANUAL || "").trim(),
-    []
-  );
 
   const status = useMemo(
     () => (tenant?.subscription_status || "INACTIVE").toUpperCase(),
@@ -66,6 +126,13 @@ export default function BillingPanel() {
     () => status === "TRIAL" && trialValid(tenant?.trial_ends_at || null),
     [status, tenant]
   );
+
+  const currentPlanCycle = useMemo(() => {
+    const p = String(tenant?.plan || "").toUpperCase();
+    if (p === "YEARLY") return "YEARLY" as const;
+    if (p === "MONTHLY") return "MONTHLY" as const;
+    return "MONTHLY" as const;
+  }, [tenant]);
 
   const isInactive = useMemo(() => status === "INACTIVE", [status]);
 
@@ -94,19 +161,52 @@ export default function BillingPanel() {
   const loadTenantBilling = async (tId: string) => {
     console.log("[BILLING] load tenant billing", tId);
 
-    const { data, error } = await supabase
-      .from("tenants")
-      .select("id, subscription_status, trial_ends_at, current_period_end, plan")
-      .eq("id", tId)
-      .single();
+    try {
+      const token = await getAccessToken();
+      const res = await fetch("/api/billing/status", {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      const json = await res.json().catch(() => ({} as any));
+      if (!res.ok) {
+        console.log("[BILLING] billing/status error:", json);
+        alert(json?.message || "Erro ao carregar assinatura.");
+        return;
+      }
 
-    if (error) {
-      console.log("[BILLING] load tenant error:", error);
-      alert("Erro ao carregar assinatura: " + error.message);
+      const next = (json?.tenantBilling as TenantBilling) || null;
+      setTenant(next);
+      if (next?.cnpj) {
+        setCpfCnpj(maskCpfCnpj(String(next.cnpj)));
+      }
+    } catch (e: any) {
+      console.log("[BILLING] billing/status exception:", e);
+      alert("Erro ao carregar assinatura.");
       return;
     }
+  };
 
-    setTenant((data as TenantBilling) || null);
+  const loadSummary = async () => {
+    try {
+      const token = await getAccessToken();
+      const res = await fetch("/api/billing/summary", {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      const json = await res.json().catch(() => ({} as any));
+      if (!res.ok) {
+        // tabela pode ainda não existir; não quebra a tela
+        setSummary(null);
+        return;
+      }
+      setSummary(json?.totals || null);
+    } catch {
+      setSummary(null);
+    }
   };
 
   const getAccessToken = async () => {
@@ -148,6 +248,7 @@ export default function BillingPanel() {
       if (alive) {
         setTenantId(tId);
         await loadTenantBilling(tId);
+        await loadSummary();
         setLoading(false);
       }
     };
@@ -198,51 +299,95 @@ export default function BillingPanel() {
     return json;
   };
 
-  const openCheckoutFixed = async (plan: "MONTHLY" | "YEARLY") => {
+  const startSubscription = async (plan: "MONTHLY" | "YEARLY") => {
     if (!tenantId) return;
-
-    const url = plan === "MONTHLY" ? mensalUrl : anualUrl;
-
-    if (!url) {
-      alert(
-        plan === "MONTHLY"
-          ? "Link Mensal não configurado (NEXT_PUBLIC_ASAAS_LINK_MENSAL)."
-          : "Link Anual não configurado (NEXT_PUBLIC_ASAAS_LINK_ANUAL)."
-      );
-      return;
-    }
 
     setBusy(true);
     try {
-      // ✅ Chama API para criar/obter customer no Asaas (salva asaas_customer_id)
       const token = await getAccessToken();
-      const apiRes = await fetch("/api/asaas/create-recurring-link", {
+
+      // ✅ garante billing_email antes do checkout
+      await ensureBillingEmail(plan);
+
+      const digits = onlyDigits(cpfCnpj);
+      if (!(digits.length === 11 || digits.length === 14)) {
+        alert("Informe um CPF (11 dígitos) ou CNPJ (14 dígitos) para cobrança.");
+        return;
+      }
+
+      const apiRes = await fetch("/api/asaas/subscribe", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ cycle: plan }),
+        body: JSON.stringify({
+          plan: plan === "YEARLY" ? "yearly" : "monthly",
+          cpfCnpj: digits,
+          billingType,
+        }),
       });
 
       const apiJson = await apiRes.json().catch(() => ({} as any));
 
       if (!apiRes.ok) {
-        console.log("[BILLING] create-recurring-link error:", apiJson);
-        const msg = apiJson?.message || "Erro ao preparar link de pagamento.";
+        console.log("[BILLING] create-subscription error:", apiJson);
+        const msg = apiJson?.message || "Erro ao criar assinatura.";
+        if (
+          apiJson?.extra?.code === "MISSING_CPF_CNPJ" ||
+          apiJson?.extra?.code === "MISSING_CPF_CNPJ_ON_ASAAS"
+        ) {
+          alert(msg);
+          return;
+        }
+
         alert(msg);
         return;
       }
 
-      console.log("[BILLING] create-recurring-link success:", apiJson);
+      console.log("[BILLING] create-subscription success:", apiJson);
 
-      await ensureBillingEmail(plan);
+      const invoiceUrl = apiJson?.redirectUrl || null;
+      if (invoiceUrl) {
+        // ✅ redireciona no mesmo tab (fluxo profissional)
+        window.location.href = String(invoiceUrl);
+        return;
+      }
 
-      // ✅ abriu checkout: ainda NÃO marcamos justActivated
-      // (ativação real acontece no webhook)
-      window.open(url, "_blank", "noopener,noreferrer");
+      // fallback raro: assinatura criada, mas o payment ainda não apareceu
+      alert(
+        "Assinatura criada, mas o checkout ainda está sendo gerado. Clique em 'Atualizar status' em alguns segundos."
+      );
     } finally {
       setBusy(false);
+    }
+  };
+
+  const changePlan = async (cycle: "MONTHLY" | "YEARLY") => {
+    if (!tenantId) return;
+
+    setPlanBusy(true);
+    try {
+      const token = await getAccessToken();
+      const res = await fetch("/api/asaas/change-plan", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ cycle }),
+      });
+
+      const json = await res.json().catch(() => ({} as any));
+      if (!res.ok) {
+        alert(json?.message || "Erro ao trocar plano.");
+        return;
+      }
+
+      alert("Plano atualizado com sucesso! ✅");
+      await loadTenantBilling(tenantId);
+    } finally {
+      setPlanBusy(false);
     }
   };
 
@@ -284,6 +429,7 @@ export default function BillingPanel() {
       }
 
       await loadTenantBilling(tenantId);
+      await loadSummary();
 
       // ✅ marcou ativação "AGORA" (para aparecer Começar)
       setJustActivated(true);
@@ -309,7 +455,7 @@ export default function BillingPanel() {
         <div className="flex gap-2 flex-wrap">
           {showStart ? (
             <button
-              className="bg-black text-white px-3 py-2 rounded-xl text-sm font-semibold hover:opacity-90 min-h-[44px]"
+              className="bg-black text-white px-3 py-2 rounded-xl text-sm font-semibold hover:opacity-90 min-h-11"
               onClick={handleStart}
               title="Ir para Pedidos"
             >
@@ -317,7 +463,7 @@ export default function BillingPanel() {
             </button>
           ) : showBack ? (
             <button
-              className="border px-3 py-2 rounded-xl text-sm font-semibold bg-white hover:bg-slate-50 min-h-[44px]"
+              className="border px-3 py-2 rounded-xl text-sm font-semibold bg-white hover:bg-slate-50 min-h-11"
               onClick={handleBack}
             >
               ← Voltar
@@ -325,7 +471,7 @@ export default function BillingPanel() {
           ) : null}
 
           <button
-            className="border px-3 py-2 rounded-xl text-sm font-semibold bg-white hover:bg-slate-50 min-h-[44px]"
+            className="border px-3 py-2 rounded-xl text-sm font-semibold bg-white hover:bg-slate-50 min-h-11"
             onClick={() => tenantId && loadTenantBilling(tenantId)}
           >
             Atualizar status
@@ -375,6 +521,34 @@ export default function BillingPanel() {
         )}
       </div>
 
+      {/* DASHBOARD */}
+      {summary ? (
+        <div className="mt-4 p-4 rounded-xl border bg-white">
+          <div className="text-sm font-extrabold">Financeiro (no seu banco)</div>
+          <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+            <div>
+              <div className="text-xs text-slate-600">Pagamentos recebidos</div>
+              <div className="font-semibold">{summary.received_count}</div>
+            </div>
+            <div>
+              <div className="text-xs text-slate-600">Último pagamento</div>
+              <div className="font-semibold">{summary.last_payment_date || "—"}</div>
+            </div>
+            <div>
+              <div className="text-xs text-slate-600">Total bruto</div>
+              <div className="font-semibold">R$ {Number(summary.received_gross || 0).toFixed(2)}</div>
+            </div>
+            <div>
+              <div className="text-xs text-slate-600">Total líquido</div>
+              <div className="font-semibold">R$ {Number(summary.received_net || 0).toFixed(2)}</div>
+            </div>
+          </div>
+          <div className="mt-2 text-xs text-slate-500">
+            Alimentado automaticamente pelo webhook (asaas_payments).
+          </div>
+        </div>
+      ) : null}
+
       {/* PROMOCODE */}
       <div className="mt-6">
         <div className="text-sm font-bold">Cupom</div>
@@ -383,12 +557,12 @@ export default function BillingPanel() {
             value={promo}
             onChange={(e) => setPromo(e.target.value)}
             placeholder="Ex: PROMO7 ou CUPOMFAMILIA"
-            className="border rounded-xl px-3 py-2 text-sm w-full sm:w-56 min-h-[44px]"
+            className="border rounded-xl px-3 py-2 text-sm w-full sm:w-56 min-h-11"
           />
           <button
             onClick={applyPromo}
             disabled={promoBusy}
-            className="border px-4 py-2 rounded-xl text-sm font-semibold bg-white hover:bg-slate-50 min-h-[44px] w-full sm:w-auto disabled:opacity-60"
+            className="border px-4 py-2 rounded-xl text-sm font-semibold bg-white hover:bg-slate-50 min-h-11 w-full sm:w-auto disabled:opacity-60"
           >
             {promoBusy ? "Aplicando..." : "Aplicar cupom"}
           </button>
@@ -399,25 +573,141 @@ export default function BillingPanel() {
       </div>
 
       {/* CHECKOUT */}
+      <div className="mt-6">
+        <div className="text-sm font-bold">CPF/CNPJ</div>
+        <div className="mt-2 flex flex-wrap gap-2">
+          <input
+            value={cpfCnpj}
+            onChange={(e) => setCpfCnpj(maskCpfCnpj(e.target.value))}
+            inputMode="numeric"
+            placeholder="Digite seu CPF ou CNPJ"
+            className="border rounded-xl px-3 py-2 text-sm w-full sm:w-72 min-h-11"
+          />
+          <button
+            type="button"
+            onClick={() => router.push("/configuracoes")}
+            className="border px-4 py-2 rounded-xl text-sm font-semibold bg-white hover:bg-slate-50 min-h-11 w-full sm:w-auto"
+            title="Configurações (dados do tenant)"
+          >
+            Editar dados
+          </button>
+        </div>
+        <div className="mt-2 text-xs text-slate-500">
+          Usado para emissão da cobrança no Asaas. (Aceita CPF 11 dígitos ou CNPJ 14 dígitos)
+        </div>
+      </div>
+
+      <div className="mt-4">
+        <div className="text-sm font-bold">Forma de pagamento</div>
+        <div className="mt-2 grid grid-cols-2 sm:grid-cols-4 gap-2">
+          <button
+            type="button"
+            onClick={() => setBillingType("UNDEFINED")}
+            className={`border px-3 py-2 rounded-xl text-sm font-semibold min-h-11 w-full ${
+              billingType === "UNDEFINED" ? "bg-black text-white" : "bg-white hover:bg-slate-50"
+            }`}
+            title="Deixa o checkout do Asaas oferecer as opções"
+          >
+            Escolher
+          </button>
+          <button
+            type="button"
+            onClick={() => setBillingType("CREDIT_CARD")}
+            className={`border px-3 py-2 rounded-xl text-sm font-semibold min-h-11 w-full ${
+              billingType === "CREDIT_CARD" ? "bg-black text-white" : "bg-white hover:bg-slate-50"
+            }`}
+          >
+            Cartão
+          </button>
+          <button
+            type="button"
+            onClick={() => setBillingType("PIX")}
+            className={`border px-3 py-2 rounded-xl text-sm font-semibold min-h-11 w-full ${
+              billingType === "PIX" ? "bg-black text-white" : "bg-white hover:bg-slate-50"
+            }`}
+          >
+            PIX
+          </button>
+          <button
+            type="button"
+            onClick={() => setBillingType("BOLETO")}
+            className={`border px-3 py-2 rounded-xl text-sm font-semibold min-h-11 w-full ${
+              billingType === "BOLETO" ? "bg-black text-white" : "bg-white hover:bg-slate-50"
+            }`}
+          >
+            Boleto
+          </button>
+        </div>
+        <div className="mt-2 text-xs text-slate-500">
+          Dica: use <b>Escolher</b> para o checkout mostrar Cartão/PIX/Boleto no link.
+        </div>
+      </div>
+
       <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-2">
         <button
-          onClick={() => openCheckoutFixed("MONTHLY")}
+          onClick={() => startSubscription("MONTHLY")}
           disabled={busy || isLifetime}
-          className="bg-black text-white px-5 py-2 rounded-xl text-sm font-semibold disabled:opacity-60 min-h-[44px] w-full"
+          className="bg-black text-white px-5 py-2 rounded-xl text-sm font-semibold disabled:opacity-60 min-h-11 w-full"
           title={isLifetime ? "Assinatura vitalícia não precisa checkout" : ""}
         >
-          {busy ? "Abrindo..." : isLifetime ? "Vitalícia ativa" : "Assinar Mensal"}
+          {busy
+            ? "Processando..."
+            : isLifetime
+              ? "Vitalícia ativa"
+              : `${planMonthlyName} (R$ ${planMonthlyValue})`}
         </button>
 
         <button
-          onClick={() => openCheckoutFixed("YEARLY")}
+          onClick={() => startSubscription("YEARLY")}
           disabled={busy || isLifetime}
-          className="bg-slate-900 text-white px-5 py-2 rounded-xl text-sm font-semibold disabled:opacity-60 min-h-[44px] w-full"
+          className="bg-slate-900 text-white px-5 py-2 rounded-xl text-sm font-semibold disabled:opacity-60 min-h-11 w-full"
           title={isLifetime ? "Assinatura vitalícia não precisa checkout" : ""}
         >
-          {busy ? "Abrindo..." : isLifetime ? "Vitalícia ativa" : "Assinar Anual"}
+          {busy
+            ? "Processando..."
+            : isLifetime
+              ? "Vitalícia ativa"
+              : `${planYearlyName} (R$ ${planYearlyValue})`}
         </button>
       </div>
+
+      {/* TROCA DE PLANO */}
+      {!isLifetime && (isActive || isTrial) ? (
+        <div className="mt-4 p-4 rounded-xl border bg-white">
+          <div className="text-sm font-extrabold">Trocar plano</div>
+          <div className="mt-1 text-xs text-slate-600">
+            Plano atual: <b>{currentPlanCycle}</b>
+          </div>
+
+          <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {currentPlanCycle !== "MONTHLY" ? (
+              <button
+                disabled={planBusy}
+                className="border px-4 py-2 rounded-xl text-sm font-semibold bg-white hover:bg-slate-50 min-h-11 disabled:opacity-60 w-full"
+                onClick={() => changePlan("MONTHLY")}
+              >
+                {planBusy ? "Atualizando..." : "Trocar para Mensal"}
+              </button>
+            ) : (
+              <div className="hidden sm:block" />
+            )}
+
+            {currentPlanCycle !== "YEARLY" ? (
+              <button
+                disabled={planBusy}
+                className="border px-4 py-2 rounded-xl text-sm font-semibold bg-white hover:bg-slate-50 min-h-11 disabled:opacity-60 w-full"
+                onClick={() => changePlan("YEARLY")}
+              >
+                {planBusy ? "Atualizando..." : "Trocar para Anual"}
+              </button>
+            ) : null}
+          </div>
+
+          <div className="mt-2 text-xs text-slate-500">
+            A mudança é aplicada na assinatura do Asaas e salva no seu banco.
+          </div>
+        </div>
+      ) : null}
 
       <div className="mt-4 text-xs text-slate-500">
         Após o pagamento, o webhook do Asaas atualiza o status automaticamente.

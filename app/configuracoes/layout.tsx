@@ -27,7 +27,7 @@ function NavItem({
       onClick={onClick}
       className={[
         "px-3 py-3 rounded-xl text-sm font-semibold border transition whitespace-nowrap",
-        "min-h-[44px] inline-flex items-center justify-center",
+        "min-h-11 inline-flex items-center justify-center",
         active
           ? "bg-emerald-600 text-white border-emerald-600 shadow-sm"
           : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50",
@@ -105,15 +105,22 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
       if (!profile?.tenant_id) return;
 
-      const { data: tenant } = await supabase
-        .from("tenants")
-        .select(
-          "id, subscription_status, trial_ends_at, current_period_end, plan"
-        )
-        .eq("id", profile.tenant_id)
-        .single();
+      const token = data.session.access_token;
+      const res = await fetch("/api/billing/status", {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      const json = await res.json().catch(() => ({} as any));
+      if (!res.ok) {
+        console.log("[CONFIG LAYOUT] billing/status error:", json);
+        setTenantBilling(null);
+        setLoading(false);
+        return;
+      }
 
-      setTenantBilling((tenant as TenantBilling) || null);
+      setTenantBilling((json?.tenantBilling as TenantBilling) || null);
       setLoading(false);
     };
 
@@ -169,7 +176,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                 onClick={() => router.push("/assinatura")}
                 className={[
                   "text-xs font-semibold px-3 py-2 rounded-full border whitespace-nowrap",
-                  "min-h-[40px]",
+                  "min-h-10",
                   "hover:opacity-90 hover:shadow-sm",
                   badge.cls,
                 ].join(" ")}
@@ -186,7 +193,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
               <button
                 onClick={logout}
-                className="border px-3 py-2 rounded-xl text-sm font-semibold bg-white hover:bg-slate-50 whitespace-nowrap min-h-[40px]"
+                className="border px-3 py-2 rounded-xl text-sm font-semibold bg-white hover:bg-slate-50 whitespace-nowrap min-h-10"
               >
                 Sair
               </button>
@@ -195,7 +202,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             {/* MOBILE MENU BUTTON */}
             <button
               onClick={() => setMobileOpen((v) => !v)}
-              className="sm:hidden border rounded-xl px-3 py-2 bg-white hover:bg-slate-50 min-h-[44px]"
+              className="sm:hidden border rounded-xl px-3 py-2 bg-white hover:bg-slate-50 min-h-11"
               aria-label="Abrir menu"
             >
               {/* ícone hambúrguer simples */}
@@ -225,7 +232,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                   onClick={() => router.push("/assinatura")}
                   className={[
                     "text-sm font-semibold px-3 py-3 rounded-xl border",
-                    "min-h-[44px] w-full text-left",
+                    "min-h-11 w-full text-left",
                     "hover:opacity-90 hover:shadow-sm",
                     badge.cls,
                   ].join(" ")}
@@ -244,7 +251,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
                 <button
                   onClick={logout}
-                  className="border px-3 py-3 rounded-xl text-sm font-semibold bg-white hover:bg-slate-50 w-full text-left min-h-[44px]"
+                  className="border px-3 py-3 rounded-xl text-sm font-semibold bg-white hover:bg-slate-50 w-full text-left min-h-11"
                 >
                   Sair
                 </button>

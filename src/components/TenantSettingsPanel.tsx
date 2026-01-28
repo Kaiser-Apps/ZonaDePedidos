@@ -63,6 +63,20 @@ function maskCNPJ(value: string) {
   );
 }
 
+function maskCPF(value: string) {
+  const v = onlyDigits(value).slice(0, 11);
+  return v.replace(
+    /(\d{3})(\d{3})(\d{3})(\d{0,2})/,
+    (_, a, b, c, d) => `${a}${b ? "." + b : ""}${c ? "." + c : ""}${d ? "-" + d : ""}`
+  );
+}
+
+function maskCpfCnpj(value: string) {
+  const d = onlyDigits(value);
+  if (d.length <= 11) return maskCPF(d);
+  return maskCNPJ(d);
+}
+
 const emptyForm: TenantForm = {
   name: "",
   cnpj: "",
@@ -377,7 +391,7 @@ export default function TenantSettingsPanel() {
 
     const payload = {
       name: form.name.trim(),
-      cnpj: form.cnpj ? maskCNPJ(form.cnpj) : null,
+        cnpj: form.cnpj ? maskCpfCnpj(form.cnpj) : null,
       ie: form.ie ? form.ie.trim() : null,
       endereco: form.endereco ? form.endereco.trim() : null,
       phone: form.phone ? onlyDigits(form.phone) : null,
@@ -539,10 +553,11 @@ export default function TenantSettingsPanel() {
           />
 
           <Field
-            label="CNPJ"
-            value={maskCNPJ(form.cnpj)}
+            label="CPF/CNPJ"
+            value={maskCpfCnpj(form.cnpj)}
             onChange={(v) => setForm((p) => ({ ...p, cnpj: v }))}
-            placeholder="00.000.000/0000-00"
+            placeholder="000.000.000-00 ou 00.000.000/0000-00"
+            hint="Obrigatório para boleto no Asaas."
           />
 
           <Field
