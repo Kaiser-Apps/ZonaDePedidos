@@ -80,6 +80,7 @@ export async function POST(req: Request) {
     }
 
     // cria tenant
+    console.log("[REGISTER] about to insert tenant with name:", { tenantName, type: typeof tenantName, length: tenantName.length });
     const { data: t, error: tErr } = await supabaseAdmin
       .from("tenants")
       .insert({
@@ -87,7 +88,7 @@ export async function POST(req: Request) {
         subscription_status: "INACTIVE",
         plan: "free",
       })
-      .select("id")
+      .select("id, name")
       .single();
 
     if (tErr || !t?.id) {
@@ -101,7 +102,7 @@ export async function POST(req: Request) {
     }
 
     const tenantId = String(t.id);
-    console.log("[REGISTER] tenant created:", { tenantId, name: tenantName });
+    console.log("[REGISTER] tenant created:", { tenantId, name: tenantName, savedName: t.name, match: t.name === tenantName });
 
     // cria profile vinculado
     const { error: pErr } = await supabaseAdmin.from("profiles").insert({
