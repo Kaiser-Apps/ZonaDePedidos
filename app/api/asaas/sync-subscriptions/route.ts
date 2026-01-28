@@ -77,6 +77,25 @@ export async function POST() {
           }
         }
 
+        // Buscar último pagamento recebido da assinatura
+        let last_payment_date = null;
+        let last_payment_value = null;
+        try {
+          const payRes = await fetch(`${ASAAS_BASE_URL}/v3/payments?subscription=${sub.id}&status=RECEIVED&limit=1&offset=0&sort=paymentDate&order=desc`, {
+            headers: { "access_token": ASAAS_API_KEY },
+          });
+          if (payRes.ok) {
+            const payJson = await payRes.json();
+            const lastPayment = (payJson.data && payJson.data.length > 0) ? payJson.data[0] : null;
+            if (lastPayment) {
+              last_payment_date = lastPayment.paymentDate || null;
+              last_payment_value = lastPayment.value || null;
+            }
+          }
+        } catch (e) {
+          errors.push({ subId: sub.id, err: 'Erro ao buscar último pagamento' });
+        }
+
         const { error: upErr } = await supabase
           .from("asaas_subscriptions")
           .upsert({
@@ -87,7 +106,8 @@ export async function POST() {
             cycle: sub.cycle,
             status: sub.status,
             next_due_date: sub.nextDueDate || null,
-            last_payment_date: sub.lastInvoiceDate || null,
+            last_payment_date,
+            last_payment_value,
             payment_link_name,
             updated_at: new Date().toISOString(),
           }, { onConflict: "asaas_subscription_id" });
