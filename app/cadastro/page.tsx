@@ -5,6 +5,13 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { supabase } from "../../src/lib/supabaseClient";
 
+function getAuthErrInfo(err: any) {
+  const message = String(err?.message || "");
+  const status = (err as any)?.status;
+  const code = (err as any)?.code;
+  return { message, status, code };
+}
+
 export default function CadastroPage() {
   const router = useRouter();
 
@@ -76,17 +83,39 @@ export default function CadastroPage() {
         });
 
       if (signUpErr) {
-        console.log("[CADASTRO] signUp error:", signUpErr);
+        const info = getAuthErrInfo(signUpErr);
+        console.log("[CADASTRO] signUp error (detailed):", info);
 
-        const msg = (signUpErr.message || "").toLowerCase();
+        const msg = info.message.toLowerCase();
+        const code = String(info.code || "").toLowerCase();
+        const status = Number(info.status || 0);
 
-        // ✅ Email já cadastrado (mensagens comuns)
+        // ✅ Rate limit (muitas tentativas em pouco tempo)
+        if (status === 429) {
+          alert(
+            "Muitas tentativas em pouco tempo. Aguarde alguns minutos e tente novamente."
+          );
+          return;
+        }
+
+        // ✅ Limite de envio de email (confirmação/magic link)
+        if (
+          code.includes("over_email_send_rate_limit") ||
+          msg.includes("email rate limit") ||
+          msg.includes("rate limit")
+        ) {
+          alert(
+            "Limite de envio de e-mails atingido. Aguarde alguns minutos e tente novamente."
+          );
+          return;
+        }
+
+        // ✅ Email já cadastrado
         if (
           msg.includes("already registered") ||
           msg.includes("already exists") ||
           msg.includes("user already") ||
           msg.includes("email already") ||
-          msg.includes("already") ||
           msg.includes("registered") ||
           msg.includes("exists")
         ) {
@@ -95,7 +124,7 @@ export default function CadastroPage() {
           return;
         }
 
-        alert(signUpErr.message);
+        alert(info.message || "Erro ao criar conta.");
         return;
       }
 
@@ -114,13 +143,33 @@ export default function CadastroPage() {
             password: senha,
           });
 
-        // ✅ Se não conseguiu login, precisamos diferenciar:
-        // - Email já existe / senha diferente -> manda pro login
-        // - Conta criada mas exige confirmação -> avisa confirmação
         if (signInErr || !signInData.session?.access_token) {
-          console.log("[CADASTRO] signIn after signUp error:", signInErr);
+          const info = getAuthErrInfo(signInErr);
+          console.log("[CADASTRO] signIn after signUp error (detailed):", info);
 
-          const msg = (signInErr?.message || "").toLowerCase();
+          const msg = (info.message || "").toLowerCase();
+          const code = String(info.code || "").toLowerCase();
+          const status = Number(info.status || 0);
+
+          // ✅ Rate limit (muitas tentativas)
+          if (status === 429) {
+            alert(
+              "Muitas tentativas em pouco tempo. Aguarde alguns minutos e tente novamente."
+            );
+            return;
+          }
+
+          // ✅ Limite de envio de email (em alguns fluxos)
+          if (
+            code.includes("over_email_send_rate_limit") ||
+            msg.includes("email rate limit") ||
+            msg.includes("rate limit")
+          ) {
+            alert(
+              "Limite de envio de e-mails atingido. Aguarde alguns minutos e tente novamente."
+            );
+            return;
+          }
 
           // ✅ Supabase costuma retornar isso quando:
           // - usuário já existe com outra senha
