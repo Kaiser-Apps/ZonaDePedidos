@@ -87,6 +87,7 @@ export async function POST(req: Request) {
       .from("tenants")
       .insert({
         name: tenantName,
+        billing_email: userEmail, // Salva o e-mail do responsável
         subscription_status: "INACTIVE",
         plan: "free",
       })
