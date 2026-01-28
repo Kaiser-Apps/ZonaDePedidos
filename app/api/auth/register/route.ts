@@ -110,7 +110,7 @@ export async function POST(req: Request) {
       tenant_id: tenantId,
       // opcional: já deixa o full_name como null (você pode preencher depois)
       // full_name: null,
-      role: "admin",
+      role: "user",
       is_active: true,
     });
 

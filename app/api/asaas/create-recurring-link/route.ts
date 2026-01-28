@@ -139,17 +139,18 @@ export async function POST(req: Request) {
       }
 
       // Salva customer ID no tenant
-      const { error: upErr } = await supabaseAdmin
+      console.log("[ASAAS] attempting to save customer ID:", { tenantId, asaasCustomerId });
+      const { error: upErr, data: upData } = await supabaseAdmin
         .from("tenants")
         .update({ asaas_customer_id: asaasCustomerId })
         .eq("id", tenantId);
 
       if (upErr) {
         console.log("[ASAAS] failed saving asaas_customer_id:", upErr);
-        return jsonError("Falha ao salvar customer no tenant", 500);
+        return jsonError("Falha ao salvar customer no tenant", 500, { error: upErr });
       }
 
-      console.log("[ASAAS] customer created:", asaasCustomerId);
+      console.log("[ASAAS] customer created and saved:", { tenantId, asaasCustomerId, upData });
     }
 
     let body: Body = {};
