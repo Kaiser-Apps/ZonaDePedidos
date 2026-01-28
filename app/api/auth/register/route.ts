@@ -34,8 +34,10 @@ export async function POST(req: Request) {
     const body = await req.json().catch(() => ({} as any));
     const tenantName = String(body?.tenantName || "").trim();
 
-    console.log("[REGISTER] body raw:", body);
-    console.log("[REGISTER] tenantName parsed:", tenantName);
+    console.log("[REGISTER] raw request body:", JSON.stringify(body));
+    console.log("[REGISTER] extracted tenantName:", tenantName, "length:", tenantName.length);
+    console.log("[REGISTER] tenantName === MINHA EMPRESA?", tenantName === "MINHA EMPRESA");
+    console.log("[REGISTER] tenantName == MINHA EMPRESA?", tenantName == "MINHA EMPRESA");
 
     if (!tenantName) return jsonError("tenantName é obrigatório.", 400);
 
