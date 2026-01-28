@@ -59,7 +59,7 @@ export async function GET(req: Request) {
     if (!jwt) return jsonError("Authorization Bearer token ausente", 401);
 
     const gate = await assertSuperAdmin(supabaseAdmin, jwt);
-    if (!gate.ok) return jsonError(gate.message, gate.status);
+    if (!gate.ok) return jsonError(gate.message || "Acesso negado", gate.status);
 
     // paginação simples (se quiser, depois dá pra expor via querystring)
     const perPage = 200;

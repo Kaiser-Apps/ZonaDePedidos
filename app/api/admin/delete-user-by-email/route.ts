@@ -86,7 +86,7 @@ export async function POST(req: Request) {
     if (!jwt) return jsonError("Authorization Bearer token ausente", 401);
 
     const gate = await assertSuperAdmin(supabaseAdmin, jwt);
-    if (!gate.ok) return jsonError(gate.message, gate.status);
+    if (!gate.ok) return jsonError(gate.message || "Acesso negado", gate.status);
 
     const body = await req.json().catch(() => ({} as any));
     const email = normalizeEmail(body?.email);
