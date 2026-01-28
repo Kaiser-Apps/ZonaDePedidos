@@ -77,6 +77,24 @@ export default function CadastroPage() {
 
       if (signUpErr) {
         console.log("[CADASTRO] signUp error:", signUpErr);
+
+        const msg = (signUpErr.message || "").toLowerCase();
+
+        // ✅ Email já cadastrado (mensagens comuns)
+        if (
+          msg.includes("already registered") ||
+          msg.includes("already exists") ||
+          msg.includes("user already") ||
+          msg.includes("email already") ||
+          msg.includes("already") ||
+          msg.includes("registered") ||
+          msg.includes("exists")
+        ) {
+          alert("Este e-mail já está cadastrado. Faça login para continuar.");
+          router.replace("/login");
+          return;
+        }
+
         alert(signUpErr.message);
         return;
       }
@@ -96,10 +114,30 @@ export default function CadastroPage() {
             password: senha,
           });
 
+        // ✅ Se não conseguiu login, precisamos diferenciar:
+        // - Email já existe / senha diferente -> manda pro login
+        // - Conta criada mas exige confirmação -> avisa confirmação
         if (signInErr || !signInData.session?.access_token) {
           console.log("[CADASTRO] signIn after signUp error:", signInErr);
+
+          const msg = (signInErr?.message || "").toLowerCase();
+
+          // ✅ Supabase costuma retornar isso quando:
+          // - usuário já existe com outra senha
+          // - ou credenciais inválidas
+          if (
+            msg.includes("invalid login credentials") ||
+            msg.includes("invalid") ||
+            msg.includes("credentials")
+          ) {
+            alert("Este e-mail já está cadastrado. Faça login para continuar.");
+            router.replace("/login");
+            return;
+          }
+
+          // ✅ Caso clássico: conta criada mas exige confirmação de email
           alert(
-            "Conta criada! Verifique seu email para confirmação. Caso não encontre, verifique também a caixa de spam"
+            "Conta criada! Verifique seu email para confirmação. Caso não encontre, verifique também a caixa de spam."
           );
           router.replace("/login");
           return;
@@ -173,6 +211,9 @@ export default function CadastroPage() {
               onChange={(e) => setEmail(e.target.value)}
               placeholder="seuemail@exemplo.com"
               className="w-full border rounded-xl px-3 py-2 text-sm"
+              inputMode="email"
+              autoCapitalize="none"
+              autoCorrect="off"
             />
           </div>
 
