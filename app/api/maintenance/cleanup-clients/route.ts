@@ -63,6 +63,18 @@ type ClientRow = {
   created_at: string | null;
 };
 
+function isBlank(v: unknown) {
+  return String(v || "").trim().length === 0;
+}
+
+type Mode = "contact_missing" | "all_missing";
+
+function parseMode(v: string | null): Mode {
+  const s = String(v || "").trim().toLowerCase();
+  if (s === "all_missing") return "all_missing";
+  return "contact_missing";
+}
+
 export async function POST(req: Request) {
   try {
     try {
@@ -84,23 +96,19 @@ export async function POST(req: Request) {
     const olderThanMinutes = Math.max(1, parseIntSafe(url.searchParams.get("older_than_minutes"), 30));
     const limit = Math.min(1000, Math.max(1, parseIntSafe(url.searchParams.get("limit"), 200)));
     const dryRun = parseBool(url.searchParams.get("dry_run"), true);
+    const mode = parseMode(url.searchParams.get("mode"));
+    const debug = url.searchParams.get("debug") === "1";
 
     const cutoff = new Date(Date.now() - olderThanMinutes * 60 * 1000).toISOString();
 
-    // ⚠️ Segurança: só limpa clientes claramente incompletos:
-    // - sem nome
-    // - sem telefone
-    // - sem cpf
-    // - sem cnpj
-    // - e sem pedidos associados
+    // ⚠️ Segurança:
+    // Sempre exige: sem pedidos associados.
+    // Por padrão (mode=contact_missing): nome OU telefone vazio.
+    // Opcional (mode=all_missing): nome+telefone+cpf+cnpj vazios.
     const { data: rawClients, error: cErr } = await supabaseAdmin
       .from("clients")
       .select("id, tenant_id, nome, telefone, cpf, cnpj, created_at")
       .lt("created_at", cutoff)
-      .or("nome.is.null,nome.eq.")
-      .or("telefone.is.null,telefone.eq.")
-      .or("cpf.is.null,cpf.eq.")
-      .or("cnpj.is.null,cnpj.eq.")
       .limit(limit);
 
     if (cErr) return jsonError("Erro ao buscar clients", 500, cErr);
@@ -134,7 +142,45 @@ export async function POST(req: Request) {
         .filter(Boolean)
     );
 
-    const deletable = clients.filter((c) => !usedIds.has(String(c.id)));
+    const counts = {
+      hasOrders: 0,
+      notIncomplete: 0,
+      deletable: 0,
+    };
+
+    const reasons: Array<{ id: string; reason: string; created_at: string | null }> = [];
+
+    const isIncomplete = (c: ClientRow) => {
+      const nameBlank = isBlank(c.nome);
+      const phoneBlank = isBlank(c.telefone);
+      const cpfBlank = isBlank(c.cpf);
+      const cnpjBlank = isBlank(c.cnpj);
+
+      if (mode === "all_missing") {
+        return nameBlank && phoneBlank && cpfBlank && cnpjBlank;
+      }
+
+      // default: contato incompleto
+      return nameBlank || phoneBlank;
+    };
+
+    const deletable = clients.filter((c) => {
+      const id = String(c.id);
+      if (usedIds.has(id)) {
+        counts.hasOrders++;
+        if (debug && reasons.length < 50) reasons.push({ id, reason: "HAS_ORDERS", created_at: c.created_at });
+        return false;
+      }
+
+      if (!isIncomplete(c)) {
+        counts.notIncomplete++;
+        if (debug && reasons.length < 50) reasons.push({ id, reason: "NOT_INCOMPLETE", created_at: c.created_at });
+        return false;
+      }
+
+      counts.deletable++;
+      return true;
+    });
 
     if (dryRun) {
       return NextResponse.json({
@@ -145,8 +191,10 @@ export async function POST(req: Request) {
         deleted: 0,
         dryRun: true,
         olderThanMinutes,
+        mode,
         cutoff,
         sample: deletable.slice(0, 25),
+        debug: debug ? { counts, reasons } : undefined,
       });
     }
 
@@ -163,7 +211,9 @@ export async function POST(req: Request) {
       deleted: deletableIds.length,
       dryRun: false,
       olderThanMinutes,
+      mode,
       cutoff,
+      debug: debug ? { counts, reasons } : undefined,
     });
   } catch (err: unknown) {
     console.log("[CLEANUP CLIENTS] error:", err);
