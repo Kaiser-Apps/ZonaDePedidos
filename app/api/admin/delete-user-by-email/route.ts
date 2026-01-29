@@ -117,6 +117,25 @@ export async function POST(req: Request) {
     // 3) deletar dados do tenant
     try {
       if (tenantId) {
+        // 🔥 IMPORTANTE: algumas tabelas referenciam tenants sem ON DELETE CASCADE.
+        // Se não apagarmos antes, o delete do tenant falha com FK.
+        await mustOk(
+          "delete asaas_payments",
+          await supabaseAdmin.from("asaas_payments").delete().eq("tenant_id", tenantId)
+        );
+
+        // asaas_subscriptions tem FK com ON DELETE CASCADE, mas apagamos explicitamente
+        // para manter consistência e evitar depender apenas de cascade.
+        await mustOk(
+          "delete asaas_subscriptions",
+          await supabaseAdmin.from("asaas_subscriptions").delete().eq("tenant_id", tenantId)
+        );
+
+        await mustOk(
+          "delete asaas_customers",
+          await supabaseAdmin.from("asaas_customers").delete().eq("tenant_id", tenantId)
+        );
+
         await mustOk(
           "delete orders",
           await supabaseAdmin.from("orders").delete().eq("tenant_id", tenantId)
@@ -149,8 +168,9 @@ export async function POST(req: Request) {
       }
     } catch (e: any) {
       console.log("[ADMIN] delete step failed", e);
-      return jsonError("Falha ao deletar dados (DB)", 500, {
-        step: e?.step,
+      const step = String(e?.step || "unknown");
+      return jsonError(`Falha ao deletar dados (DB): ${step}`, 500, {
+        step,
         code: e?.error?.code,
         message: e?.error?.message,
         details: e?.error?.details,
