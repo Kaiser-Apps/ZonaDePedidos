@@ -107,6 +107,9 @@ export default function BillingPanel() {
 
   const [summary, setSummary] = useState<BillingSummary | null>(null);
 
+  // ✅ UI: assinatura ativa não deve ver opções de novos planos
+  const [editOpen, setEditOpen] = useState(false);
+
   // ✅ aparece "Começar" somente quando ativou AGORA (cupom/pagamento)
   const [justActivated, setJustActivated] = useState(false);
 
@@ -126,6 +129,11 @@ export default function BillingPanel() {
     () => status === "TRIAL" && trialValid(tenant?.trial_ends_at || null),
     [status, tenant]
   );
+
+  const canStartNewSubscription = useMemo(() => {
+    // Se já está ativo ou em trial, não deve criar nova assinatura.
+    return !isLifetime && !isActive && !isTrial;
+  }, [isLifetime, isActive, isTrial]);
 
   const currentPlanCycle = useMemo(() => {
     const p = String(tenant?.plan || "").toUpperCase();
@@ -157,6 +165,11 @@ export default function BillingPanel() {
     // ✅ seu "pedidos" hoje está na HOME (app/page.tsx)
     router.push("/");
   };
+
+  useEffect(() => {
+    // fecha editor automaticamente quando não faz mais sentido
+    if (canStartNewSubscription) setEditOpen(false);
+  }, [canStartNewSubscription]);
 
   const loadTenantBilling = async (tId: string) => {
     console.log("[BILLING] load tenant billing", tId);
@@ -572,107 +585,136 @@ export default function BillingPanel() {
         </div>
       </div>
 
-      {/* CHECKOUT */}
-      <div className="mt-6">
-        <div className="text-sm font-bold">CPF/CNPJ</div>
-        <div className="mt-2 flex flex-wrap gap-2">
-          <input
-            value={cpfCnpj}
-            onChange={(e) => setCpfCnpj(maskCpfCnpj(e.target.value))}
-            inputMode="numeric"
-            placeholder="Digite seu CPF ou CNPJ"
-            className="border rounded-xl px-3 py-2 text-sm w-full sm:w-72 min-h-11"
-          />
-          <button
-            type="button"
-            onClick={() => router.push("/configuracoes")}
-            className="border px-4 py-2 rounded-xl text-sm font-semibold bg-white hover:bg-slate-50 min-h-11 w-full sm:w-auto"
-            title="Configurações (dados do tenant)"
-          >
-            Editar dados
-          </button>
-        </div>
-        <div className="mt-2 text-xs text-slate-500">
-          Usado para emissão da cobrança no Asaas. (Aceita CPF 11 dígitos ou CNPJ 14 dígitos)
-        </div>
-      </div>
+      {/* CHECKOUT (somente quando NÃO existe assinatura ativa/trial) */}
+      {canStartNewSubscription ? (
+        <>
+          <div className="mt-6">
+            <div className="text-sm font-bold">CPF/CNPJ</div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <input
+                value={cpfCnpj}
+                onChange={(e) => setCpfCnpj(maskCpfCnpj(e.target.value))}
+                inputMode="numeric"
+                placeholder="Digite seu CPF ou CNPJ"
+                className="border rounded-xl px-3 py-2 text-sm w-full sm:w-72 min-h-11"
+              />
+              <button
+                type="button"
+                onClick={() => router.push("/configuracoes")}
+                className="border px-4 py-2 rounded-xl text-sm font-semibold bg-white hover:bg-slate-50 min-h-11 w-full sm:w-auto"
+                title="Configurações (dados do tenant)"
+              >
+                Editar dados
+              </button>
+            </div>
+            <div className="mt-2 text-xs text-slate-500">
+              Usado para emissão da cobrança no Asaas. (Aceita CPF 11 dígitos ou CNPJ 14 dígitos)
+            </div>
+          </div>
 
-      <div className="mt-4">
-        <div className="text-sm font-bold">Forma de pagamento</div>
-        <div className="mt-2 grid grid-cols-2 sm:grid-cols-4 gap-2">
-          <button
-            type="button"
-            onClick={() => setBillingType("UNDEFINED")}
-            className={`border px-3 py-2 rounded-xl text-sm font-semibold min-h-11 w-full ${
-              billingType === "UNDEFINED" ? "bg-black text-white" : "bg-white hover:bg-slate-50"
-            }`}
-            title="Deixa o checkout do Asaas oferecer as opções"
-          >
-            Escolher
-          </button>
-          <button
-            type="button"
-            onClick={() => setBillingType("CREDIT_CARD")}
-            className={`border px-3 py-2 rounded-xl text-sm font-semibold min-h-11 w-full ${
-              billingType === "CREDIT_CARD" ? "bg-black text-white" : "bg-white hover:bg-slate-50"
-            }`}
-          >
-            Cartão
-          </button>
-          <button
-            type="button"
-            onClick={() => setBillingType("PIX")}
-            className={`border px-3 py-2 rounded-xl text-sm font-semibold min-h-11 w-full ${
-              billingType === "PIX" ? "bg-black text-white" : "bg-white hover:bg-slate-50"
-            }`}
-          >
-            PIX
-          </button>
-          <button
-            type="button"
-            onClick={() => setBillingType("BOLETO")}
-            className={`border px-3 py-2 rounded-xl text-sm font-semibold min-h-11 w-full ${
-              billingType === "BOLETO" ? "bg-black text-white" : "bg-white hover:bg-slate-50"
-            }`}
-          >
-            Boleto
-          </button>
-        </div>
-        <div className="mt-2 text-xs text-slate-500">
-          Dica: use <b>Escolher</b> para o checkout mostrar Cartão/PIX/Boleto no link.
-        </div>
-      </div>
+          <div className="mt-4">
+            <div className="text-sm font-bold">Forma de pagamento</div>
+            <div className="mt-2 grid grid-cols-2 sm:grid-cols-4 gap-2">
+              <button
+                type="button"
+                onClick={() => setBillingType("UNDEFINED")}
+                className={`border px-3 py-2 rounded-xl text-sm font-semibold min-h-11 w-full ${
+                  billingType === "UNDEFINED" ? "bg-black text-white" : "bg-white hover:bg-slate-50"
+                }`}
+                title="Deixa o checkout do Asaas oferecer as opções"
+              >
+                Escolher
+              </button>
+              <button
+                type="button"
+                onClick={() => setBillingType("CREDIT_CARD")}
+                className={`border px-3 py-2 rounded-xl text-sm font-semibold min-h-11 w-full ${
+                  billingType === "CREDIT_CARD" ? "bg-black text-white" : "bg-white hover:bg-slate-50"
+                }`}
+              >
+                Cartão
+              </button>
+              <button
+                type="button"
+                onClick={() => setBillingType("PIX")}
+                className={`border px-3 py-2 rounded-xl text-sm font-semibold min-h-11 w-full ${
+                  billingType === "PIX" ? "bg-black text-white" : "bg-white hover:bg-slate-50"
+                }`}
+              >
+                PIX
+              </button>
+              <button
+                type="button"
+                onClick={() => setBillingType("BOLETO")}
+                className={`border px-3 py-2 rounded-xl text-sm font-semibold min-h-11 w-full ${
+                  billingType === "BOLETO" ? "bg-black text-white" : "bg-white hover:bg-slate-50"
+                }`}
+              >
+                Boleto
+              </button>
+            </div>
+            <div className="mt-2 text-xs text-slate-500">
+              Dica: use <b>Escolher</b> para o checkout mostrar Cartão/PIX/Boleto no link.
+            </div>
+          </div>
 
-      <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-2">
-        <button
-          onClick={() => startSubscription("MONTHLY")}
-          disabled={busy || isLifetime}
-          className="bg-black text-white px-5 py-2 rounded-xl text-sm font-semibold disabled:opacity-60 min-h-11 w-full"
-          title={isLifetime ? "Assinatura vitalícia não precisa checkout" : ""}
-        >
-          {busy
-            ? "Processando..."
-            : isLifetime
-              ? "Vitalícia ativa"
-              : `${planMonthlyName} (R$ ${planMonthlyValue})`}
-        </button>
+          <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <button
+              onClick={() => startSubscription("MONTHLY")}
+              disabled={busy || isLifetime || !canStartNewSubscription}
+              className="bg-black text-white px-5 py-2 rounded-xl text-sm font-semibold disabled:opacity-60 min-h-11 w-full"
+              title={isLifetime ? "Assinatura vitalícia não precisa checkout" : ""}
+            >
+              {busy
+                ? "Processando..."
+                : isLifetime
+                  ? "Vitalícia ativa"
+                  : `${planMonthlyName} (R$ ${planMonthlyValue})`}
+            </button>
 
-        <button
-          onClick={() => startSubscription("YEARLY")}
-          disabled={busy || isLifetime}
-          className="bg-slate-900 text-white px-5 py-2 rounded-xl text-sm font-semibold disabled:opacity-60 min-h-11 w-full"
-          title={isLifetime ? "Assinatura vitalícia não precisa checkout" : ""}
-        >
-          {busy
-            ? "Processando..."
-            : isLifetime
-              ? "Vitalícia ativa"
-              : `${planYearlyName} (R$ ${planYearlyValue})`}
-        </button>
-      </div>
+            <button
+              onClick={() => startSubscription("YEARLY")}
+              disabled={busy || isLifetime || !canStartNewSubscription}
+              className="bg-slate-900 text-white px-5 py-2 rounded-xl text-sm font-semibold disabled:opacity-60 min-h-11 w-full"
+              title={isLifetime ? "Assinatura vitalícia não precisa checkout" : ""}
+            >
+              {busy
+                ? "Processando..."
+                : isLifetime
+                  ? "Vitalícia ativa"
+                  : `${planYearlyName} (R$ ${planYearlyValue})`}
+            </button>
+          </div>
+        </>
+      ) : !isLifetime ? (
+        <div className="mt-6 p-4 rounded-xl border bg-white">
+          <div className="text-sm font-extrabold">Assinatura atual</div>
+          <div className="mt-1 text-xs text-slate-600">
+            Sua assinatura já está ativa. Para alterar plano, clique em <b>Editar assinatura</b>.
+          </div>
+
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setEditOpen((v) => !v)}
+              className="bg-black text-white px-4 py-2 rounded-xl text-sm font-semibold hover:opacity-90 min-h-11"
+            >
+              {editOpen ? "Fechar edição" : "Editar assinatura"}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => router.push("/configuracoes")}
+              className="border px-4 py-2 rounded-xl text-sm font-semibold bg-white hover:bg-slate-50 min-h-11"
+            >
+              Editar dados
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {/* TROCA DE PLANO */}
-      {!isLifetime && (isActive || isTrial) ? (
+      {!isLifetime && (isActive || isTrial) && (editOpen || isTrial) ? (
         <div className="mt-4 p-4 rounded-xl border bg-white">
           <div className="text-sm font-extrabold">Trocar plano</div>
           <div className="mt-1 text-xs text-slate-600">

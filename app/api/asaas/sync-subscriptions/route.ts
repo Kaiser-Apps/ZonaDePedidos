@@ -36,10 +36,45 @@ function normalizeBillingStatus(subStatus: any, hasPaidPayment: boolean) {
   return null;
 }
 
-export async function POST() {
+function parseMinutes(v: string | null): number {
+  if (!v) return 0;
+  const n = Number(v);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.floor(n);
+}
+
+function isOlderThanMinutes(iso: any, minutes: number) {
+  if (!minutes) return false;
+  const s = String(iso || "").trim();
+  if (!s) return false;
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return false;
+  return Date.now() - d.getTime() > minutes * 60 * 1000;
+}
+
+export async function POST(req: Request) {
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
     auth: { persistSession: false },
   });
+
+  // 🔒 Proteção opcional: se ASAAS_SYNC_TOKEN estiver setado, exige token no header
+  const expectedToken = (process.env.ASAAS_SYNC_TOKEN || "").trim();
+  if (expectedToken) {
+    const got =
+      req.headers.get("x-sync-token") ||
+      req.headers.get("x-webhook-token") ||
+      req.headers.get("authorization") ||
+      "";
+    const normalized = got.toLowerCase().startsWith("bearer ") ? got.slice(7).trim() : got.trim();
+    if (!normalized || normalized !== expectedToken) {
+      return NextResponse.json({ ok: false, message: "Unauthorized" }, { status: 401 });
+    }
+  }
+
+  const urlObj = new URL(req.url);
+  const cleanupMinutes =
+    parseMinutes(urlObj.searchParams.get("cleanup_unpaid_minutes")) ||
+    parseMinutes(urlObj.searchParams.get("cleanup"));
 
   // Buscar todos tenants para possível associação
   const { data: tenants, error: tenantsErr } = await supabase
@@ -56,6 +91,8 @@ export async function POST() {
   );
 
   let total = 0, updated = 0, errors = [] as any[];
+  let cleaned = 0;
+  let canceled = 0;
   let page = 0, hasMore = true;
   const limit = 100;
 
@@ -135,6 +172,71 @@ export async function POST() {
         const billing_status = normalizeBillingStatus(sub.status, hasPaidPayment);
         const current_period_end = dateOnlyToIso(sub.nextDueDate || null);
 
+        const shouldCleanup =
+          cleanupMinutes > 0 &&
+          !hasPaidPayment &&
+          billing_status === "PENDING" &&
+          isOlderThanMinutes(sub.createdAt || sub.created_at || null, cleanupMinutes);
+
+        if (shouldCleanup) {
+          // 1) tenta cancelar no Asaas (best-effort)
+          try {
+            const delRes = await fetch(`${ASAAS_BASE_URL}/v3/subscriptions/${encodeURIComponent(String(sub.id))}`, {
+              method: "DELETE",
+              headers: { "access_token": ASAAS_API_KEY },
+            });
+            if (delRes.ok) {
+              canceled++;
+            } else {
+              const delJson = await delRes.json().catch(() => ({}));
+              errors.push({ subId: sub.id, action: "cancel", status: delRes.status, body: delJson });
+            }
+          } catch (e: any) {
+            errors.push({ subId: sub.id, action: "cancel", err: String(e?.message || e) });
+          }
+
+          // 2) remove do banco local
+          const { error: delLocalErr } = await supabase
+            .from("asaas_subscriptions")
+            .delete()
+            .eq("asaas_subscription_id", String(sub.id));
+
+          if (delLocalErr) {
+            errors.push({ subId: sub.id, action: "delete_local", delLocalErr });
+          } else {
+            cleaned++;
+          }
+
+          // 3) se estava vinculado a um tenant, limpa referência com segurança
+          if (tenant_id) {
+            const { data: tRow } = await supabase
+              .from("tenants")
+              .select("id, asaas_subscription_id, subscription_status")
+              .eq("id", tenant_id)
+              .maybeSingle();
+
+            const linkedId = String((tRow as any)?.asaas_subscription_id || "").trim();
+            const st = upper((tRow as any)?.subscription_status);
+
+            if (linkedId === String(sub.id) && (st === "PENDING" || st === "INACTIVE" || !st)) {
+              const { error: clearErr } = await supabase
+                .from("tenants")
+                .update({
+                  subscription_status: "INACTIVE",
+                  asaas_subscription_id: null,
+                  current_period_end: null,
+                  past_due_since: null,
+                })
+                .eq("id", tenant_id);
+
+              if (clearErr) errors.push({ subId: sub.id, tenant_id, action: "clear_tenant", clearErr });
+            }
+          }
+
+          // pula o upsert pois limpamos
+          continue;
+        }
+
         const { error: upErr } = await supabase
           .from("asaas_subscriptions")
           .upsert(
@@ -186,5 +288,5 @@ export async function POST() {
     }
   }
 
-  return NextResponse.json({ ok: true, total, updated, errors });
+  return NextResponse.json({ ok: true, total, updated, cleaned, canceled, cleanupMinutes, errors });
 }
