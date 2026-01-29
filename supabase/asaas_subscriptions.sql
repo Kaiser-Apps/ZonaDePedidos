@@ -9,6 +9,15 @@ CREATE TABLE IF NOT EXISTS public.asaas_subscriptions (
   status text,
   next_due_date date,
   last_payment_date date,
+  last_payment_value numeric,
+  payment_link_name text,
+
+  -- Campos de billing (equivalentes ao que antes ficava em public.subscriptions)
+  billing_status text,
+  current_period_end timestamp with time zone,
+  last_payment_id text,
+  last_invoice_url text,
+
   created_at timestamp with time zone DEFAULT now(),
   updated_at timestamp with time zone DEFAULT now()
 );

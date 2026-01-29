@@ -22,6 +22,11 @@ function toIsoMaybe(v?: string | null) {
   return null;
 }
 
+function isPaidStatus(v: any) {
+  const s = String(v || "").trim().toUpperCase();
+  return s === "RECEIVED" || s === "CONFIRMED";
+}
+
 export async function POST(req: Request) {
   try {
     const expectedToken = String(process.env.ASAAS_WEBHOOK_TOKEN || "").trim();
@@ -84,14 +89,25 @@ export async function POST(req: Request) {
     // pagamentos
     if (event === "PAYMENT_RECEIVED" || event === "PAYMENT_CONFIRMED") {
       // ⚠️ Alguns cenários disparam eventos sem pagamento efetivo.
-      // Só consideramos pago quando existir paymentDate.
-      const paidAt = toIsoMaybe(payment?.paymentDate) || null;
-      if (paidAt) {
+      // Só consideramos pago quando existir uma data de confirmação/recebimento OU status pago.
+      const paidAt =
+        toIsoMaybe(payment?.paymentDate) ||
+        toIsoMaybe(payment?.confirmedDate) ||
+        toIsoMaybe(payment?.clientPaymentDate) ||
+        toIsoMaybe(payment?.creditDate) ||
+        null;
+      const paidByStatus = isPaidStatus(payment?.status);
+      if (paidAt || paidByStatus) {
         newStatus = "ACTIVE";
         patch.past_due_since = null;
+        patch.subscription_status = "ACTIVE";
 
         // não deixa current_period_end virar null (o que parece "vitalícia" na UI)
         periodEnd = toIsoMaybe(payment?.dueDate) || toIsoMaybe(payment?.creditDate) || null;
+
+        if (periodEnd) {
+          patch.current_period_end = periodEnd;
+        }
       } else {
         console.log("[ASAAS WEBHOOK] ignore ACTIVE without paymentDate", {
           event,
@@ -107,12 +123,19 @@ export async function POST(req: Request) {
       newStatus = "PAST_DUE";
       periodEnd = toIsoMaybe(payment?.dueDate) || null;
       patch.past_due_since = toIsoMaybe(payment?.dueDate) || new Date().toISOString();
+      patch.subscription_status = "PAST_DUE";
+
+      if (periodEnd) {
+        patch.current_period_end = periodEnd;
+      }
     }
 
     if (event === "PAYMENT_DELETED" || event === "PAYMENT_REFUNDED") {
       newStatus = "INACTIVE";
       periodEnd = null;
       patch.past_due_since = null;
+      patch.subscription_status = "INACTIVE";
+      patch.current_period_end = null;
     }
 
     // assinatura (se vier)
@@ -128,6 +151,8 @@ export async function POST(req: Request) {
       newStatus = "INACTIVE";
       periodEnd = null;
       patch.past_due_since = null;
+      patch.subscription_status = "INACTIVE";
+      patch.current_period_end = null;
     }
 
     // ⚠️ Fonte de verdade: tabela subscriptions.
@@ -145,27 +170,52 @@ export async function POST(req: Request) {
     // Atualiza apenas campos auxiliares no tenant (ex.: tolerância e limpeza de trial)
     if (Object.keys(patch).length > 0) {
       console.log("[ASAAS WEBHOOK] update tenant (aux)", tenantId, patch);
-      await supabaseAdmin.from("tenants").update(patch).eq("id", tenantId);
+      const { error: tUpErr } = await supabaseAdmin.from("tenants").update(patch).eq("id", tenantId);
+      if (tUpErr) {
+        console.log("[ASAAS WEBHOOK] tenants update failed:", tUpErr);
+      }
     }
 
-    // ✅ Atualiza tabela subscriptions (fonte de verdade) se existir linha vinculada
+    // ✅ Fonte de verdade agora: asaas_subscriptions (billing_status/current_period_end)
     if (asaasSubscriptionId || payment?.subscription) {
       const subId = String(asaasSubscriptionId || payment?.subscription || "").trim();
       if (subId) {
-        const updateSub: any = {
+        const paidAt =
+          toIsoMaybe(payment?.paymentDate) ||
+          toIsoMaybe(payment?.confirmedDate) ||
+          toIsoMaybe(payment?.clientPaymentDate) ||
+          toIsoMaybe(payment?.creditDate) ||
+          null;
+
+        const upsertSub: any = {
+          asaas_subscription_id: subId,
+          asaas_customer_id: asaasCustomerId ? String(asaasCustomerId) : null,
+          tenant_id: tenantId,
           updated_at: new Date().toISOString(),
         };
 
-        if (newStatus) updateSub.status = newStatus;
-        if (periodEnd) updateSub.current_period_end = periodEnd;
-        else if (shouldClearPeriodEnd) updateSub.current_period_end = null;
-        if (payment?.id) updateSub.last_payment_id = String(payment.id);
-        if (payment?.invoiceUrl) updateSub.last_invoice_url = String(payment.invoiceUrl);
+        if (newStatus) upsertSub.billing_status = newStatus;
+        if (periodEnd) upsertSub.current_period_end = periodEnd;
+        else if (shouldClearPeriodEnd) upsertSub.current_period_end = null;
 
-        try {
-          await supabaseAdmin.from("subscriptions").update(updateSub).eq("asaas_subscription_id", subId);
-        } catch (err) {
-          console.log("[ASAAS WEBHOOK] subscriptions update skipped/failed:", err);
+        if (subscription?.nextDueDate) upsertSub.next_due_date = toDateOnly(subscription?.nextDueDate);
+        if (payment?.dueDate) upsertSub.next_due_date = toDateOnly(payment?.dueDate);
+
+        if (payment?.id) upsertSub.last_payment_id = String(payment.id);
+        if (payment?.invoiceUrl) upsertSub.last_invoice_url = String(payment.invoiceUrl);
+
+        if (paidAt) {
+          upsertSub.last_payment_date = toDateOnly(payment?.paymentDate);
+          upsertSub.last_payment_value =
+            typeof payment?.value === "number" ? payment.value : payment?.value ? Number(payment.value) : null;
+        }
+
+        const { error: subUpErr } = await supabaseAdmin
+          .from("asaas_subscriptions")
+          .upsert(upsertSub, { onConflict: "asaas_subscription_id" });
+
+        if (subUpErr) {
+          console.log("[ASAAS WEBHOOK] asaas_subscriptions billing upsert failed:", subUpErr);
         }
       }
     }
@@ -207,7 +257,7 @@ export async function POST(req: Request) {
         });
         const subJson = await subRes.json();
         if (subRes.ok && subJson?.id) {
-          await supabaseAdmin.from("asaas_subscriptions").upsert({
+          const { error: metaUpErr } = await supabaseAdmin.from("asaas_subscriptions").upsert({
             asaas_subscription_id: subJson.id,
             asaas_customer_id: subJson.customer,
             tenant_id: tenantId,
@@ -216,8 +266,13 @@ export async function POST(req: Request) {
             status: subJson.status,
             next_due_date: subJson.nextDueDate || null,
             last_payment_date: subJson.lastInvoiceDate || null,
+            // não sobrescreve billing_status/current_period_end aqui; isso vem dos eventos de pagamento
             updated_at: new Date().toISOString(),
           }, { onConflict: "asaas_subscription_id" });
+
+          if (metaUpErr) {
+            console.log("[ASAAS WEBHOOK] asaas_subscriptions meta upsert failed:", metaUpErr);
+          }
         }
       } catch (err) {
         console.log("[ASAAS WEBHOOK] erro ao atualizar asaas_subscriptions:", err);

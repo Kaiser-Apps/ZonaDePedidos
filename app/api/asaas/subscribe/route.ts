@@ -225,24 +225,29 @@ export async function POST(req: Request) {
     // 6) salva subscriptions (fonte de verdade)
     const nowIso = new Date().toISOString();
 
-    await supabaseAdmin
-      .from("subscriptions")
-      .upsert(
-        {
-          tenant_id: tenantId,
-          plan_code: plan,
-          status: "PENDING",
-          asaas_subscription_id: asaasSubscriptionId,
-          asaas_customer_id: asaasCustomerId,
-          last_payment_id: paymentId,
-          last_invoice_url: invoiceUrl,
-          updated_at: nowIso,
-        },
-        { onConflict: "asaas_subscription_id" }
-      );
+    // ✅ Fonte de verdade: asaas_subscriptions (inclui campos de billing)
+    await supabaseAdmin.from("asaas_subscriptions").upsert(
+      {
+        asaas_subscription_id: asaasSubscriptionId,
+        asaas_customer_id: asaasCustomerId,
+        tenant_id: tenantId,
+        email: userEmail || null,
+        cycle,
+        status: String(subscription?.status || "").toUpperCase() || null,
+        next_due_date: subscription?.nextDueDate || null,
+        billing_status: "PENDING",
+        last_payment_id: paymentId,
+        last_invoice_url: invoiceUrl,
+        updated_at: nowIso,
+      },
+      { onConflict: "asaas_subscription_id" }
+    );
 
-    // compat: mantém plan no tenant
-    await supabaseAdmin.from("tenants").update({ plan: cycle, asaas_subscription_id: asaasSubscriptionId }).eq("id", tenantId);
+    // compat: mantém também no tenant (para UI/admin)
+    await supabaseAdmin
+      .from("tenants")
+      .update({ plan: cycle, asaas_subscription_id: asaasSubscriptionId, subscription_status: "PENDING" })
+      .eq("id", tenantId);
 
     return NextResponse.json({
       ok: true,
