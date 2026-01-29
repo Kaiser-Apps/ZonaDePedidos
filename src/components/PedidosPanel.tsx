@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "next/navigation";
 import { supabase } from "../lib/supabaseClient";
 import {
   Trash2,
@@ -576,8 +575,6 @@ const emptyForm = (): OrderForm => ({
 });
 
 export default function PedidosPanel() {
-  const searchParams = useSearchParams();
-
   const [ctx, setCtx] = useState<TenantCtx | null>(null);
   const [ctxLoading, setCtxLoading] = useState(true);
 
@@ -900,14 +897,6 @@ export default function PedidosPanel() {
     setFormOpen(true);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
-
-  useEffect(() => {
-    const novo = searchParams.get("novo");
-    if (novo === "1" && !formOpen) {
-      openNewOrder();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams, formOpen]);
 
   const pickOrderToEdit = (o: OrderRow) => {
     const bruto = o.valor_bruto != null ? Number(o.valor_bruto) : Number(o.valor || 0);
@@ -1534,15 +1523,15 @@ export default function PedidosPanel() {
           </div>
 
           <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
-            {!formOpen ? (
-              <button
-                className="bg-black text-white px-3 py-2 rounded w-full sm:w-auto"
-                onClick={openNewOrder}
-                disabled={saving}
-              >
-                Novo Pedido
-              </button>
-            ) : (
+            <button
+              className="bg-black text-white px-3 py-2 rounded w-full sm:w-auto"
+              onClick={openNewOrder}
+              disabled={saving}
+            >
+              Novo Pedido
+            </button>
+
+            {formOpen && (
               <button
                 className="border px-3 py-2 rounded w-full sm:w-auto"
                 onClick={() => setFormOpen(false)}

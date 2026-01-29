@@ -2,7 +2,13 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
-function jsonError(message: string, status = 400, extra?: any) {
+const USER_LIMIT = 50;
+
+function jsonError(
+  message: string,
+  status = 400,
+  extra?: Record<string, unknown>
+) {
   return NextResponse.json(
     { ok: false, message, ...(extra ? { extra } : {}) },
     { status }
@@ -25,14 +31,38 @@ export async function POST(req: Request) {
       auth: { persistSession: false },
     });
 
+    // ✅ trava dura no backend: não deixa criar novas contas acima do limite
+    const { count: currentUsers, error: countErr } = await supabaseAdmin
+      .from("profiles")
+      .select("user_id", { count: "exact", head: true });
+
+    if (countErr) {
+      console.log("[REGISTER] count profiles error:", countErr);
+      return jsonError("Erro ao verificar capacidade de usuários.", 500, {
+        code: countErr.code,
+        message: countErr.message,
+        details: (countErr as any)?.details,
+      });
+    }
+
+    if (Number(currentUsers || 0) >= USER_LIMIT) {
+      return jsonError(
+        "Limite de 50 contas atingido no momento. Fale com o suporte para liberar novas contas.",
+        403,
+        { limit: USER_LIMIT, count: Number(currentUsers || 0) }
+      );
+    }
+
     const auth = req.headers.get("authorization") || "";
     const jwt = auth.toLowerCase().startsWith("bearer ")
       ? auth.slice(7).trim()
       : "";
     if (!jwt) return jsonError("Authorization Bearer token ausente", 401);
 
-    const body = await req.json().catch(() => ({} as any));
-    const tenantName = String(body?.tenantName || "").trim();
+    const body = (await req
+      .json()
+      .catch(() => ({} as Record<string, unknown>))) as Record<string, unknown>;
+    const tenantName = String(body?.tenantName ?? "").trim();
 
     console.log("[REGISTER] raw request body:", JSON.stringify(body));
     console.log("[REGISTER] extracted tenantName:", tenantName, "length:", tenantName.length);
@@ -100,11 +130,20 @@ export async function POST(req: Request) {
 
     if (tErr || !t?.id) {
       console.log("[REGISTER] create tenant error:", tErr);
+
+      const errExtra = (tErr as unknown as {
+        code?: string | null;
+        message?: string | null;
+        details?: string | null;
+        hint?: string | null;
+      }) || { };
+
       return jsonError("Falha ao criar tenant", 500, {
-        code: tErr?.code,
-        message: tErr?.message,
-        details: (tErr as any)?.details,
-        hint: (tErr as any)?.hint,
+        code: errExtra.code ?? (tErr as unknown as { code?: string })?.code,
+        message:
+          errExtra.message ?? (tErr as unknown as { message?: string })?.message,
+        details: errExtra.details,
+        hint: errExtra.hint,
       });
     }
 
@@ -123,11 +162,19 @@ export async function POST(req: Request) {
 
     if (pErr) {
       console.log("[REGISTER] create profile error:", pErr);
+
+      const errExtra = (pErr as unknown as {
+        code?: string | null;
+        message?: string | null;
+        details?: string | null;
+        hint?: string | null;
+      }) || { };
+
       return jsonError("Falha ao criar profile", 500, {
-        code: pErr.code,
-        message: pErr.message,
-        details: (pErr as any)?.details,
-        hint: (pErr as any)?.hint,
+        code: errExtra.code ?? pErr.code,
+        message: errExtra.message ?? pErr.message,
+        details: errExtra.details,
+        hint: errExtra.hint,
       });
     }
 
@@ -139,10 +186,10 @@ export async function POST(req: Request) {
       reused: false,
       ms: Date.now() - startedAt,
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.log("[REGISTER] unexpected error:", err);
     return jsonError("Erro inesperado no cadastro", 500, {
-      message: String(err?.message || err),
+      message: err instanceof Error ? err.message : String(err),
     });
   }
 }

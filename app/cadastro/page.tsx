@@ -1,14 +1,27 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { supabase } from "../../src/lib/supabaseClient";
 
-function getAuthErrInfo(err: any) {
+type CapacityInfo = {
+  ok: true;
+  limit: number;
+  count: number;
+  remaining: number;
+  isFull: boolean;
+};
+
+function getAuthErrInfo(err: unknown) {
   const message = String(err?.message || "");
-  const status = (err as any)?.status;
-  const code = (err as any)?.code;
+  const asObj = (typeof err === "object" && err !== null
+    ? (err as Record<string, unknown>)
+    : null);
+
+  const message = String(asObj?.message ?? "");
+  const status = asObj?.status;
+  const code = asObj?.code;
   return { message, status, code };
 }
 
@@ -19,6 +32,44 @@ export default function CadastroPage() {
   const [email, setEmail] = useState("");
   const [senha, setSenha] = useState("");
   const [busy, setBusy] = useState(false);
+
+  const [capacity, setCapacity] = useState<CapacityInfo | null>(null);
+  const [capacityMsg, setCapacityMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const load = async () => {
+      try {
+        const res = await fetch("/api/auth/capacity", { method: "GET" });
+        const json = (await res
+          .json()
+          .catch(() => ({} as Record<string, unknown>))) as Record<string, unknown>;
+        if (cancelled) return;
+
+        if (res.ok && json?.ok) {
+          setCapacity(json as CapacityInfo);
+          setCapacityMsg(null);
+          return;
+        }
+
+        setCapacity(null);
+        setCapacityMsg(
+          String(json?.message || "Não foi possível verificar a capacidade.")
+        );
+      } catch (e: any) {
+      } catch (e: unknown) {
+        if (cancelled) return;
+        setCapacity(null);
+        setCapacityMsg("Não foi possível verificar a capacidade.");
+      }
+    };
+
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const registerTenant = async (accessToken: string, tenantName: string) => {
     console.log("[CADASTRO] calling /api/auth/register", { tenantName });
@@ -40,6 +91,14 @@ export default function CadastroPage() {
         json,
       });
 
+      // ✅ limite global de contas
+      if (res.status === 403) {
+        throw new Error(
+          json?.message ||
+            "Limite de contas atingido no momento. Fale com o suporte."
+        );
+      }
+
       // ✅ quando o backend devolve 409: usuário já possui tenant
       if (res.status === 409) {
         throw new Error(
@@ -56,6 +115,13 @@ export default function CadastroPage() {
   };
 
   const onSignup = async () => {
+    if (capacity?.isFull) {
+      alert(
+        `Limite de ${capacity.limit} contas atingido no momento. Fale com o suporte para liberar novas contas.`
+      );
+      return;
+    }
+
     const tenantName = empresa.trim();
     const e = email.trim().toLowerCase();
 
@@ -75,7 +141,7 @@ export default function CadastroPage() {
     setBusy(true);
     try {
       console.log("[CADASTRO] signUp", { email: e, tenantName });
-
+          const info = getAuthErrInfo(signUpErr);
       const { data: signUpData, error: signUpErr } =
         await supabase.auth.signUp({
           email: e,
@@ -213,7 +279,7 @@ export default function CadastroPage() {
           return;
         }
 
-        // outro erro
+        alert(err instanceof Error ? err.message : String(err));
         throw e;
       }
 
@@ -231,7 +297,7 @@ export default function CadastroPage() {
     <div className="min-h-screen bg-[#F3F7F4] flex items-center justify-center p-4">
       <div className="w-full max-w-md bg-white border rounded-2xl shadow-sm p-6">
         <div className="flex items-center gap-3">
-          <div className="h-10 w-10 rounded-2xl bg-gradient-to-br from-emerald-600 to-green-500 flex items-center justify-center shadow-sm">
+          <div className="h-10 w-10 rounded-2xl bg-linear-to-br from-emerald-600 to-green-500 flex items-center justify-center shadow-sm">
             <span className="text-white font-extrabold">Z</span>
           </div>
           <div>
@@ -241,6 +307,21 @@ export default function CadastroPage() {
             </div>
           </div>
         </div>
+
+        {capacity?.isFull ? (
+          <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+            Limite de {capacity.limit} contas atingido no momento. Fale com o
+            suporte para liberar novas contas.
+          </div>
+        ) : capacity ? (
+          <div className="mt-4 rounded-xl border bg-slate-50 p-3 text-xs text-slate-700">
+            Vagas disponíveis: <span className="font-semibold">{capacity.remaining}</span> de {capacity.limit}
+          </div>
+        ) : capacityMsg ? (
+          <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
+            {capacityMsg}
+          </div>
+        ) : null}
 
         <div className="mt-6 space-y-3">
           <div>
@@ -279,7 +360,7 @@ export default function CadastroPage() {
 
           <button
             onClick={onSignup}
-            disabled={busy}
+            disabled={busy || capacity?.isFull === true}
             className="w-full bg-black text-white px-5 py-2 rounded-xl text-sm font-semibold disabled:opacity-60"
           >
             {busy ? "Criando..." : "Criar conta"}

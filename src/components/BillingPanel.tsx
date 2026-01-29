@@ -13,13 +13,6 @@ type TenantBilling = {
   cnpj: string | null;
 };
 
-type BillingSummary = {
-  received_count: number;
-  received_gross: number;
-  received_net: number;
-  last_payment_date: string | null;
-};
-
 function fmtDateBR(iso: string | null) {
   if (!iso) return "—";
   const d = new Date(iso);
@@ -105,8 +98,6 @@ export default function BillingPanel() {
   );
 
 
-  const [summary, setSummary] = useState<BillingSummary | null>(null);
-
   // ✅ aparece "Começar" somente quando ativou AGORA (cupom/pagamento)
   const [justActivated, setJustActivated] = useState(false);
 
@@ -189,26 +180,6 @@ export default function BillingPanel() {
     }
   };
 
-  const loadSummary = async () => {
-    try {
-      const token = await getAccessToken();
-      const res = await fetch("/api/billing/summary", {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
-      const json = await res.json().catch(() => ({} as any));
-      if (!res.ok) {
-        // tabela pode ainda não existir; não quebra a tela
-        setSummary(null);
-        return;
-      }
-      setSummary(json?.totals || null);
-    } catch {
-      setSummary(null);
-    }
-  };
 
   const getAccessToken = async () => {
     const { data, error } = await supabase.auth.getSession();
@@ -249,7 +220,6 @@ export default function BillingPanel() {
       if (alive) {
         setTenantId(tId);
         await loadTenantBilling(tId);
-        await loadSummary();
         setLoading(false);
       }
     };
@@ -275,7 +245,6 @@ export default function BillingPanel() {
       try {
         console.log("[BILLING] auto refresh", { reason });
         await loadTenantBilling(tenantId);
-        await loadSummary();
       } catch (e) {
         console.log("[BILLING] auto refresh failed", e);
       }
@@ -439,7 +408,6 @@ export default function BillingPanel() {
       alert("Assinatura cancelada.\n\nO status será atualizado automaticamente.");
       setJustActivated(false);
       await loadTenantBilling(tenantId);
-      await loadSummary();
     } finally {
       setCancelBusy(false);
     }
@@ -483,7 +451,6 @@ export default function BillingPanel() {
       }
 
       await loadTenantBilling(tenantId);
-      await loadSummary();
 
       // ✅ marcou ativação "AGORA" (para aparecer Começar)
       setJustActivated(true);
@@ -514,7 +481,6 @@ export default function BillingPanel() {
       }
 
       await loadTenantBilling(tenantId);
-      await loadSummary();
 
       // ✅ marcou ativação "AGORA" (para aparecer Começar)
       setJustActivated(true);
@@ -624,34 +590,6 @@ export default function BillingPanel() {
             <div className="text-xs text-slate-500 self-center">
               Depois, você pode assinar a qualquer momento.
             </div>
-          </div>
-        </div>
-      ) : null}
-
-      {/* DASHBOARD */}
-      {summary ? (
-        <div className="mt-4 p-4 rounded-xl border bg-white">
-          <div className="text-sm font-extrabold">Financeiro (no seu banco)</div>
-          <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-            <div>
-              <div className="text-xs text-slate-600">Pagamentos recebidos</div>
-              <div className="font-semibold">{summary.received_count}</div>
-            </div>
-            <div>
-              <div className="text-xs text-slate-600">Último pagamento</div>
-              <div className="font-semibold">{summary.last_payment_date || "—"}</div>
-            </div>
-            <div>
-              <div className="text-xs text-slate-600">Total bruto</div>
-              <div className="font-semibold">R$ {Number(summary.received_gross || 0).toFixed(2)}</div>
-            </div>
-            <div>
-              <div className="text-xs text-slate-600">Total líquido</div>
-              <div className="font-semibold">R$ {Number(summary.received_net || 0).toFixed(2)}</div>
-            </div>
-          </div>
-          <div className="mt-2 text-xs text-slate-500">
-            Alimentado automaticamente pelo webhook (asaas_payments).
           </div>
         </div>
       ) : null}
