@@ -242,29 +242,6 @@ export default function ClientesPanel() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  const remove = async (r: ClientRow) => {
-    if (!confirm(`Excluir o cliente "${r.nome}"?`)) return;
-
-    const { error } = await supabase.from("clients").delete().eq("id", r.id);
-
-    if (error) {
-      console.log("delete client error:", error);
-      const msg = (error.message || "").toLowerCase();
-      if (msg.includes('new" has no field "updated_at') || msg.includes("has no field \"updated_at\"")) {
-        alert(
-          "Erro ao excluir: seu banco parece ter um trigger antigo que referencia a coluna updated_at, mas a coluna foi removida.\n\n" +
-            "Corrija rodando o script: supabase/fix_clients_orders_updated_at_triggers.sql (no SQL Editor do Supabase)."
-        );
-      } else {
-        alert("Erro ao excluir: " + error.message);
-      }
-      return;
-    }
-
-    if (form.id === r.id) resetForm();
-    await loadClients();
-  };
-
   const save = async () => {
     if (!ctx) return;
 
@@ -542,12 +519,6 @@ export default function ClientesPanel() {
                           onClick={() => pickRow(r)}
                         >
                           Editar
-                        </button>
-                        <button
-                          className="border px-2 py-1 rounded"
-                          onClick={() => remove(r)}
-                        >
-                          Excluir
                         </button>
                       </div>
                     </td>

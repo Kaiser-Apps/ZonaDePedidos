@@ -83,12 +83,16 @@ export async function POST(req: Request) {
 
     // cria tenant
     console.log("[REGISTER] about to insert tenant with name:", { tenantName, type: typeof tenantName, length: tenantName.length });
+    const trialDays = 7;
+    const trialEndsAt = new Date(Date.now() + trialDays * 24 * 60 * 60 * 1000).toISOString();
     const { data: t, error: tErr } = await supabaseAdmin
       .from("tenants")
       .insert({
         name: tenantName,
         billing_email: userEmail, // Salva o e-mail do responsável
-        subscription_status: "INACTIVE",
+        subscription_status: "TRIAL",
+        trial_started_at: new Date().toISOString(),
+        trial_ends_at: trialEndsAt,
         plan: "free",
       })
       .select("id, name")

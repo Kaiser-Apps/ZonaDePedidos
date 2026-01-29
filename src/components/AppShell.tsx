@@ -206,7 +206,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   const st = (tenantBilling?.subscription_status || "INACTIVE").toUpperCase();
-  const canGoToPedidos = st === "ACTIVE";
+  const canGoToPedidos = isAccessAllowed(tenantBilling);
   const badge =
     st === "ACTIVE"
       ? { cls: "bg-emerald-50 text-emerald-700 border-emerald-200", text: "Ativa" }

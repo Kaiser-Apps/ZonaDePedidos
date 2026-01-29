@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { supabase } from "../lib/supabaseClient";
 import {
@@ -13,7 +13,7 @@ import {
   Image as ImageIcon,
   Download,
 } from "lucide-react";
-import { toPng, toCanvas } from "html-to-image";
+import { toCanvas } from "html-to-image";
 
 
 type TenantCtx = {
@@ -41,6 +41,10 @@ type ProductMini = {
   id: string;
   nome: string;
   client_id: string | null;
+  identificador?: string | null;
+  marca?: string | null;
+  modelo?: string | null;
+  observacao?: string | null;
 };
 
 type DiscountType = "none" | "percent" | "amount";
@@ -84,6 +88,7 @@ type OrderForm = {
   cliente_telefone: string;
 
   item: string;
+  // legacy single-product fields (kept for backward compatibility)
   produto: string;
   product_id: string;
   descricao: string;
@@ -386,7 +391,7 @@ function openPrintWindow(order: OrderRow, tenant: TenantInfo | null) {
 
     .box { border: 2px solid #111; padding: 10mm; border-radius: 8px; box-sizing: border-box; }
 
-    .muted { color: #111; font-size: 12px; }
+    .muted { color: #111; font-size: 14px; }
     .hr { border-top: 2px solid #111; margin: 10px 0; }
 
     table { width:100%; border-collapse: collapse; margin-top: 10px; page-break-inside: auto; }
@@ -394,16 +399,16 @@ function openPrintWindow(order: OrderRow, tenant: TenantInfo | null) {
     tfoot { display: table-footer-group; }
 
     tr { page-break-inside: avoid; page-break-after: auto; }
-    th, td { border: 2px solid #111; padding: 8px; font-size: 12px; vertical-align: top; }
+    th, td { border: 2px solid #111; padding: 8px; font-size: 14px; vertical-align: top; }
     th { text-align:left; background: #f5f5f5; }
 
     .right { text-align:right; }
 
-    .totals { margin-top: 10px; font-size: 12px; break-inside: avoid; page-break-inside: avoid; }
+    .totals { margin-top: 10px; font-size: 14px; break-inside: avoid; page-break-inside: avoid; }
     .totals .row { display:flex; justify-content:flex-end; gap:16px; margin-top: 6px; }
     .totals .label { min-width: 110px; text-align:right; }
     .totals .value { min-width: 140px; text-align:right; font-weight: 700; }
-    .grand { font-weight: 900; font-size: 16px; }
+    .grand { font-weight: 900; font-size: 18px; }
 
     /* opcional: evita quebras estranhas no topo */
     .avoid-break { break-inside: avoid; page-break-inside: avoid; }
@@ -542,9 +547,10 @@ function downloadDataUrl(dataUrl: string, filename: string) {
   a.remove();
 }
 
-function isDuplicateErr(err: any) {
-  const msg = (err?.message || "").toLowerCase();
-  return err?.code === "23505" || msg.includes("duplicate") || msg.includes("uq_");
+function isDuplicateErr(err: unknown) {
+  const e = err as { code?: unknown; message?: unknown } | null | undefined;
+  const msg = String(e?.message || "").toLowerCase();
+  return e?.code === "23505" || msg.includes("duplicate") || msg.includes("uq_");
 }
 
 const emptyForm = (): OrderForm => ({
@@ -605,10 +611,18 @@ export default function PedidosPanel() {
   const [clientLoading, setClientLoading] = useState(false);
   const [clientOptions, setClientOptions] = useState<ClientMini[]>([]);
   const [showClientDropdown, setShowClientDropdown] = useState(false);
-  const debounceRef = useRef<any>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [products, setProducts] = useState<ProductMini[]>([]);
   const [productsLoading, setProductsLoading] = useState(false);
+
+  const [productDetailsOpen, setProductDetailsOpen] = useState(false);
+  const [productMeta, setProductMeta] = useState({
+    identificador: "",
+    marca: "",
+    modelo: "",
+    observacao: "",
+  });
 
   const normalizeName = (v: string) =>
     String(v || "")
@@ -731,11 +745,19 @@ export default function PedidosPanel() {
     const loadProducts = async () => {
       if (!ctx?.tenantId) return;
 
+      // ✅ só mostra produtos quando existe cliente selecionado
+      const clientId = (form.client_id || "").trim();
+      if (!clientId) {
+        setProducts([]);
+        return;
+      }
+
       setProductsLoading(true);
       const { data, error } = await supabase
         .from("products")
-        .select("id, nome, client_id")
+        .select("id, nome, client_id, identificador, marca, modelo, observacao")
         .eq("tenant_id", ctx.tenantId)
+        .eq("client_id", clientId)
         .order("created_at", { ascending: false })
         .limit(300);
 
@@ -755,7 +777,7 @@ export default function PedidosPanel() {
     return () => {
       alive = false;
     };
-  }, [ctx?.tenantId]);
+  }, [ctx?.tenantId, form.client_id]);
 
   const buildOrdersOrFilter = (qRaw: string) => {
     const q = String(qRaw || "")
@@ -867,6 +889,10 @@ export default function PedidosPanel() {
     setClientQ("");
     setClientOptions([]);
     setShowClientDropdown(false);
+    setProducts([]);
+    setProductsLoading(false);
+    setProductDetailsOpen(false);
+    setProductMeta({ identificador: "", marca: "", modelo: "", observacao: "" });
   };
 
   const openNewOrder = () => {
@@ -916,11 +942,18 @@ export default function PedidosPanel() {
       valor: valorMasked,
       desconto_tipo: descontoTipo,
       desconto_valor: descontoValor,
-      status: o.status,
+      status: (o.status as (typeof STATUSES)[number]) || "aberto",
     });
 
     setClientQ(o.cliente_nome || "");
     setShowClientDropdown(false);
+    setClientOptions([]);
+
+    // detalhes opcionais do produto ficam fechados por padrão; eles são preenchidos
+    // automaticamente quando existir match no catálogo.
+    setProductDetailsOpen(false);
+    setProductMeta({ identificador: "", marca: "", modelo: "", observacao: "" });
+
     setFormOpen(true);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
@@ -1013,6 +1046,11 @@ export default function PedidosPanel() {
       };
     });
 
+    // limpando o cliente, também limpa catálogo / seleção de produto
+    setProducts([]);
+    setProductDetailsOpen(false);
+    setProductMeta({ identificador: "", marca: "", modelo: "", observacao: "" });
+
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => searchClients(v), 250);
   };
@@ -1027,7 +1065,33 @@ export default function PedidosPanel() {
     setClientQ(c.nome);
     setShowClientDropdown(false);
     setClientOptions([]);
+
+    // ao trocar cliente, reseta detalhes do produto
+    setProductDetailsOpen(false);
+    setProductMeta({ identificador: "", marca: "", modelo: "", observacao: "" });
   };
+
+  // quando seleciona um produto, puxa os detalhes do catálogo
+  useEffect(() => {
+    const pid = (form.product_id || "").trim();
+    const nome = String(form.produto || "").trim();
+
+    const matched = pid
+      ? products.find((p) => String(p.id) === pid)
+      : nome
+      ? products.find((p) => normalizeName(p.nome) === normalizeName(nome))
+      : null;
+
+    if (!matched) return;
+
+    setProductMeta({
+      identificador: matched.identificador ? String(matched.identificador) : "",
+      marca: matched.marca ? String(matched.marca) : "",
+      modelo: matched.modelo ? String(matched.modelo) : "",
+      observacao: matched.observacao ? String(matched.observacao) : "",
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.product_id, form.produto, products.length]);
 
   const ensureClientId = async (args: {
     tenantId: string;
@@ -1084,7 +1148,9 @@ export default function PedidosPanel() {
     }
 
     if (found?.id) {
-      const existingNome = String((found as any)?.nome || "").trim();
+      const existingNome = String(
+        (found as { nome?: unknown } | null | undefined)?.nome || ""
+      ).trim();
       return {
         clientId: String(found.id),
         telefoneNorm,
@@ -1121,7 +1187,9 @@ export default function PedidosPanel() {
           .maybeSingle();
 
         if (found2?.id) {
-          const existingNome2 = String((found2 as any)?.nome || "").trim();
+          const existingNome2 = String(
+            (found2 as { nome?: unknown } | null | undefined)?.nome || ""
+          ).trim();
           return {
             clientId: String(found2.id),
             telefoneNorm,
@@ -1173,7 +1241,7 @@ export default function PedidosPanel() {
     if (valorBruto <= 0) return alert("Preencha um valor maior que zero.");
 
     // ✅ calcula desconto e total final
-    const { discount, total } = calcDiscount(
+    const { total } = calcDiscount(
       valorBruto,
       form.desconto_tipo,
       form.desconto_valor
@@ -1254,8 +1322,8 @@ export default function PedidosPanel() {
             client_id: finalClientId || "",
           }));
         }
-      } catch (e: any) {
-        alert(e?.message || "Erro ao garantir cadastro do cliente.");
+      } catch (e: unknown) {
+        alert(e instanceof Error ? e.message : "Erro ao garantir cadastro do cliente.");
         return;
       }
 
@@ -1263,19 +1331,33 @@ export default function PedidosPanel() {
         return alert("Selecione ou digite o cliente.");
       }
 
-      // ✅ produto (catálogo): tenta localizar por nome, senão cria
-      const produtoNome = String(form.produto || "").trim();
-      let productId: string | null = (form.product_id || "").trim() || null;
+      // ✅ produto (único): resolve/cria/atualiza no catálogo e salva no pedido
+      const produtoNomeRaw = String(form.produto || "");
+      const produtoNome = produtoNomeRaw.trim();
+
+      const ident = String(productMeta.identificador || "").trim();
+      const marca = String(productMeta.marca || "").trim();
+      const modelo = String(productMeta.modelo || "").trim();
+      const obsProd = String(productMeta.observacao || "").trim();
+      const hasDetails = Boolean(ident || marca || modelo || obsProd);
+
+      let primaryProductId: string | null = (form.product_id || "").trim() || null;
 
       if (produtoNome) {
-        const matched = findProductByName(produtoNome);
-        if (matched?.id) {
-          productId = matched.id;
-        } else {
+        if (!primaryProductId) {
+          const matched = findProductByName(produtoNome);
+          if (matched?.id) primaryProductId = matched.id;
+        }
+
+        if (!primaryProductId) {
           const insertProd = {
             tenant_id: ctx.tenantId,
             client_id: finalClientId,
             nome: produtoNome,
+            identificador: ident || null,
+            marca: marca || null,
+            modelo: modelo || null,
+            observacao: obsProd || null,
             created_by: ctx.userId,
             updated_by: ctx.userId,
           };
@@ -1283,24 +1365,52 @@ export default function PedidosPanel() {
           const { data: createdProd, error: prodErr } = await supabase
             .from("products")
             .insert([insertProd])
-            .select("id, nome, client_id")
+            .select("id, nome, client_id, identificador, marca, modelo, observacao")
             .maybeSingle();
 
           if (prodErr) {
             console.log("[PEDIDOS] create product error:", prodErr);
           } else if (createdProd?.id) {
-            productId = String(createdProd.id);
-            setProducts((prev) => [createdProd as any, ...prev]);
+            primaryProductId = String(createdProd.id);
+            const nextProd: ProductMini = {
+              id: String(createdProd.id),
+              nome: String(createdProd.nome || ""),
+              client_id: createdProd.client_id ? String(createdProd.client_id) : null,
+              identificador: createdProd.identificador ?? null,
+              marca: createdProd.marca ?? null,
+              modelo: createdProd.modelo ?? null,
+              observacao: createdProd.observacao ?? null,
+            };
+            setProducts((prev) => [nextProd, ...prev]);
+          }
+        } else if (hasDetails) {
+          const upd = {
+            nome: produtoNome,
+            client_id: finalClientId,
+            identificador: ident || null,
+            marca: marca || null,
+            modelo: modelo || null,
+            observacao: obsProd || null,
+            updated_by: ctx.userId,
+          };
+
+          const { error: upErr } = await supabase
+            .from("products")
+            .update(upd)
+            .eq("tenant_id", ctx.tenantId)
+            .eq("id", primaryProductId);
+
+          if (upErr) {
+            console.log("[PEDIDOS] update product error:", upErr);
           }
         }
       } else {
-        productId = null;
+        primaryProductId = null;
       }
 
-      // mantém form em sync quando o usuário escolhe pelo datalist
       setForm((s) => ({
         ...s,
-        product_id: productId || "",
+        product_id: primaryProductId || "",
       }));
 
       const payload = {
@@ -1312,7 +1422,7 @@ export default function PedidosPanel() {
         cliente_telefone: finalTelefoneNorm,
         item: form.item ? form.item.trim() : null,
         produto: produtoNome ? produtoNome : null,
-        product_id: productId,
+        product_id: primaryProductId,
         descricao: form.descricao ? form.descricao.trim() : null,
         observacao: form.observacao ? form.observacao.trim() : null,
 
@@ -1341,12 +1451,14 @@ export default function PedidosPanel() {
 
         alert("Pedido atualizado!");
       } else {
-        const { error } = await supabase.from("orders").insert([
-          {
-            ...payload,
-            created_by: ctx.userId,
-          },
-        ]);
+        const { error } = await supabase
+          .from("orders")
+          .insert([
+            {
+              ...payload,
+              created_by: ctx.userId,
+            },
+          ]);
 
         if (error) {
           console.log("[PEDIDOS] insert order error:", error);
@@ -1357,7 +1469,7 @@ export default function PedidosPanel() {
         alert("Pedido cadastrado!");
       }
 
-      const savedStatus = form.status as any;
+      const savedStatus = form.status as (typeof STATUSES)[number];
       resetForm();
       setFormOpen(false);
       setStatusTab(savedStatus);
@@ -1524,82 +1636,126 @@ export default function PedidosPanel() {
             placeholder="(11) 99999-9999"
           />
 
-          <Field
-            label="Item"
-            value={form.item}
-            onChange={(v) => setForm((s) => ({ ...s, item: v }))}
-            placeholder="Ex: Serviço"
-          />
+          {/* ✅ PRODUTO + ITEM (mesma linha no desktop) */}
+          <div className="md:col-span-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+            <label className="block min-w-0">
+              <div className="text-sm font-medium mb-1">
+                Produto {productsLoading ? "(carregando...)" : ""}
+              </div>
 
-          <label className="block min-w-0">
-            <div className="text-sm font-medium mb-1">
-              Produto {productsLoading ? "(carregando...)" : ""}
-            </div>
+              <input
+                list="product-options"
+                className="border rounded px-3 py-2 w-full max-w-full min-w-0"
+                value={form.produto}
+                onChange={(e) => {
+                  const v = e.target.value;
 
-            <input
-              list="product-options"
-              className="border rounded px-3 py-2 w-full max-w-full min-w-0"
-              value={form.produto}
-              onChange={(e) => {
-                const v = e.target.value;
-
-                setForm((s) => {
-                  const key = String(v || "")
-                    .trim()
-                    .replace(/\s+/g, " ")
-                    .toLowerCase();
-
+                  const key = normalizeName(v);
                   const matched = products.find(
-                    (p) =>
-                      String(p.nome || "")
-                        .trim()
-                        .replace(/\s+/g, " ")
-                        .toLowerCase() === key
+                    (p) => normalizeName(p.nome) === key
                   );
 
-                  return {
+                  setForm((s) => ({
                     ...s,
                     produto: v,
                     product_id: matched?.id ? String(matched.id) : "",
-                  };
-                });
-              }}
-              placeholder="Ex: Maquina"
+                  }));
+                }}
+                placeholder={
+                  form.client_id
+                    ? "Ex: Máquina / Produto"
+                    : "Selecione um cliente primeiro"
+                }
+              />
+
+              <datalist id="product-options">
+                {products.map((p) => (
+                  <option key={p.id} value={p.nome} />
+                ))}
+              </datalist>
+
+              <div className="mt-2 flex items-center justify-between gap-3">
+                <div className="text-xs text-slate-500">
+                  {form.client_id
+                    ? "Ao salvar, produtos novos entram no catálogo do cliente."
+                    : "Selecione um cliente para ver os produtos cadastrados."}
+                </div>
+
+                <button
+                  type="button"
+                  className="text-xs underline text-slate-700"
+                  onClick={() => setProductDetailsOpen((v) => !v)}
+                >
+                  {productDetailsOpen ? "Ocultar detalhes" : "Detalhar produto"}
+                </button>
+              </div>
+
+              {productDetailsOpen ? (
+                <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <Field
+                    label="Identificador"
+                    value={productMeta.identificador}
+                    onChange={(v) => setProductMeta((s) => ({ ...s, identificador: v }))}
+                    placeholder="Ex: SN, IMEI, Placa, Código"
+                  />
+
+                  <Field
+                    label="Marca"
+                    value={productMeta.marca}
+                    onChange={(v) => setProductMeta((s) => ({ ...s, marca: v }))}
+                    placeholder="Ex: Bosch"
+                  />
+
+                  <Field
+                    label="Modelo"
+                    value={productMeta.modelo}
+                    onChange={(v) => setProductMeta((s) => ({ ...s, modelo: v }))}
+                    placeholder="Ex: X123"
+                  />
+
+                  <label className="block min-w-0">
+                    <div className="text-sm font-medium mb-1">Observação (produto)</div>
+                    <input
+                      className="border rounded px-3 py-2 w-full max-w-full min-w-0"
+                      value={productMeta.observacao}
+                      onChange={(e) => setProductMeta((s) => ({ ...s, observacao: e.target.value }))}
+                      placeholder="Ex: Cor, voltagem, condição"
+                    />
+                  </label>
+                </div>
+              ) : null}
+            </label>
+
+            <Field
+              label="Item"
+              value={form.item}
+              onChange={(v) => setForm((s) => ({ ...s, item: v }))}
+              placeholder="Ex: Serviço"
             />
+          </div>
 
-            <datalist id="product-options">
-              {products.map((p) => (
-                <option key={p.id} value={p.nome} />
-              ))}
-            </datalist>
+          {/* ✅ DESCONTO + VALOR DO DESCONTO + SUBTOTAL (mesma linha no desktop) */}
+          <div className="md:col-span-3 grid grid-cols-1 md:grid-cols-3 gap-3">
+            <label className="block">
+              <div className="text-sm font-medium mb-1">Desconto</div>
+              <select
+                className="border rounded px-3 py-2 w-full"
+                value={form.desconto_tipo}
+                onChange={(e) => {
+                  const next = e.target.value as DiscountType;
+                  setForm((s) => ({
+                    ...s,
+                    desconto_tipo: next,
+                    desconto_valor: next === "none" ? "" : s.desconto_valor,
+                  }));
+                }}
+              >
+                <option value="none">Sem desconto</option>
+                <option value="percent">Percentual (%)</option>
+                <option value="amount">Em reais (R$)</option>
+              </select>
+            </label>
 
-            <div className="text-xs text-slate-500 mt-1">
-              Ao digitar um produto novo e salvar, ele entra no catálogo.
-            </div>
-          </label>
-
-          {/* ✅ DESCONTO */}
-          <label className="block">
-            <div className="text-sm font-medium mb-1">Desconto</div>
-            <select
-              className="border rounded px-3 py-2 w-full"
-              value={form.desconto_tipo}
-              onChange={(e) => {
-                const next = e.target.value as DiscountType;
-                setForm((s) => ({
-                  ...s,
-                  desconto_tipo: next,
-                  desconto_valor: next === "none" ? "" : s.desconto_valor,
-                }));
-              }}
-            >
-              <option value="none">Sem desconto</option>
-              <option value="percent">Percentual (%)</option>
-              <option value="amount">Em reais (R$)</option>
-            </select>
-          </label>
-
-          <div className="space-y-3">
             <label className="block">
               <div className="text-sm font-medium mb-1">
                 {form.desconto_tipo === "percent"
@@ -1932,8 +2088,8 @@ export default function PedidosPanel() {
 
 type FieldProps = {
   label: string;
-  value: any;
-  onChange: (v: any) => void;
+  value: string | number | null | undefined;
+  onChange: (v: string) => void;
   placeholder?: string;
   type?: string; // ✅ adiciona isso
 };
@@ -2014,7 +2170,7 @@ function PreviewModal(props: {
 
   const [logoDataUrl, setLogoDataUrl] = useState<string | null>(null);
 
-  async function toDataURLFromImageUrl(url: string) {
+  const toDataURLFromImageUrl = useCallback(async (url: string) => {
     const res = await fetch(url, { mode: "cors", cache: "no-store" });
     if (!res.ok) throw new Error(`Falha ao baixar logo: ${res.status}`);
     const blob = await res.blob();
@@ -2025,23 +2181,26 @@ function PreviewModal(props: {
       reader.onerror = reject;
       reader.readAsDataURL(blob);
     });
-  }
+  }, []);
 
-  async function tryLoadLogoDataUrl(logoUrl: string): Promise<string | null> {
-    try {
-      return await toDataURLFromImageUrl(logoUrl);
-    } catch (e) {
-      console.log("[PEDIDOS] direct logo fetch failed, trying proxy...", e);
-    }
+  const tryLoadLogoDataUrl = useCallback(
+    async (logoUrl: string): Promise<string | null> => {
+      try {
+        return await toDataURLFromImageUrl(logoUrl);
+      } catch (e) {
+        console.log("[PEDIDOS] direct logo fetch failed, trying proxy...", e);
+      }
 
-    try {
-      const proxied = `/api/image-proxy?url=${encodeURIComponent(logoUrl)}`;
-      return await toDataURLFromImageUrl(proxied);
-    } catch (e) {
-      console.log("[PEDIDOS] proxy logo fetch failed:", e);
-      return null;
-    }
-  }
+      try {
+        const proxied = `/api/image-proxy?url=${encodeURIComponent(logoUrl)}`;
+        return await toDataURLFromImageUrl(proxied);
+      } catch (e) {
+        console.log("[PEDIDOS] proxy logo fetch failed:", e);
+        return null;
+      }
+    },
+    [toDataURLFromImageUrl]
+  );
 
   useEffect(() => {
     let alive = true;
@@ -2065,7 +2224,7 @@ function PreviewModal(props: {
     return () => {
       alive = false;
     };
-  }, [props.tenant?.logo_url, props.order.id]);
+  }, [props.tenant?.logo_url, props.order.id, tryLoadLogoDataUrl]);
 
 
 
@@ -2242,7 +2401,7 @@ function PreviewModal(props: {
 
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  }, [PAPER_W]);
 
 
     const shareImage = async () => {
@@ -2253,12 +2412,15 @@ function PreviewModal(props: {
 
       const files = built.pages.map((p) => dataUrlToFile(p.dataUrl, p.fileName));
 
-      const navAny = navigator as any;
+      const navAny = navigator as Navigator & {
+        share?: (data: ShareData) => Promise<void>;
+        canShare?: (data: ShareData) => boolean;
+      };
+
       const canShareFiles =
-        typeof navAny !== "undefined" &&
         typeof navAny.share === "function" &&
         typeof navAny.canShare === "function" &&
-        navAny.canShare({ files });
+        navAny.canShare({ files }) === true;
 
       if (canShareFiles) {
         await navAny.share({
@@ -2276,7 +2438,7 @@ function PreviewModal(props: {
           "Seu navegador não suportou compartilhar arquivos. Fiz o download das páginas em PNG."
         );
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.log("[PEDIDOS] share image error:", err);
       alert("Não foi possível gerar a imagem. Veja o console para detalhes.");
     } finally {
@@ -2294,7 +2456,7 @@ function PreviewModal(props: {
       for (const p of built.pages) {
         downloadDataUrl(p.dataUrl, p.fileName);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.log("[PEDIDOS] download image error:", err);
       alert("Não foi possível baixar a imagem. Veja o console para detalhes.");
     } finally {
@@ -2338,7 +2500,7 @@ function PreviewModal(props: {
                   }}
                 >
 
-                  <div className="text-[13px] leading-[1.35]">
+                  <div className="text-[15px] leading-[1.45]">
                     {props.tenantLoading ? (
                       <div className="text-gray-600">
                         Carregando dados da empresa...
@@ -2347,7 +2509,7 @@ function PreviewModal(props: {
                       <>
                         <div className="flex items-start justify-between gap-6">
                           <div className="min-w-0">
-                            <div className="text-[20px] font-extrabold tracking-tight leading-tight">
+                            <div className="text-[22px] font-extrabold tracking-tight leading-tight">
                               {props.tenant?.name || ""}
                             </div>
 
@@ -2374,6 +2536,7 @@ function PreviewModal(props: {
 
                           <div className="shrink-0 flex flex-col items-end gap-3">
                             {props.tenant?.logo_url ? (
+                              // eslint-disable-next-line @next/next/no-img-element
                               <img
                                 src={logoDataUrl || props.tenant.logo_url}
                                 alt="Logo da empresa"
@@ -2384,13 +2547,13 @@ function PreviewModal(props: {
                             ) : null}
 
                             <div className="text-right">
-                              <div className="text-[11px] uppercase tracking-wide text-slate-500">
+                              <div className="text-[12px] uppercase tracking-wide text-slate-500">
                                 Pedido
                               </div>
-                              <div className="text-[15px] font-bold leading-tight">
+                              <div className="text-[16px] font-bold leading-tight">
                                 {props.order.dt_entrada || ""}
                               </div>
-                              <div className="mt-1 inline-flex items-center rounded-full border border-slate-300 px-2 py-0.5 text-[12px] font-semibold text-slate-700">
+                              <div className="mt-1 inline-flex items-center rounded-full border border-slate-300 px-2 py-0.5 text-[13px] font-semibold text-slate-700">
                                 {props.order.status || ""}
                               </div>
                             </div>
@@ -2403,16 +2566,16 @@ function PreviewModal(props: {
                   <div className="my-5 border-t border-slate-200" />
 
                   <div className="text-center">
-                    <div className="text-[12px] uppercase tracking-wide text-slate-500">
+                    <div className="text-[13px] uppercase tracking-wide text-slate-500">
                       Produto / Serviço
                     </div>
 
-                    <div className="mt-1 font-extrabold text-[18px] leading-tight">
+                    <div className="mt-1 font-extrabold text-[22px] leading-tight">
                       {props.order.produto || props.order.item || ""}
                     </div>
 
                     {props.order.produto && props.order.item ? (
-                      <div className="mt-1 text-[13px] text-slate-700">
+                      <div className="mt-1 text-[15px] text-slate-700">
                         {props.order.item}
                       </div>
                     ) : null}
@@ -2420,12 +2583,12 @@ function PreviewModal(props: {
 
                   <div className="my-5 border-t border-slate-200" />
 
-                  <div className="grid grid-cols-2 gap-4 text-[13px] leading-[1.35]">
+                  <div className="grid grid-cols-2 gap-4 text-[15px] leading-[1.45]">
                     <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                      <div className="text-[11px] uppercase tracking-wide text-slate-500">
+                      <div className="text-[12px] uppercase tracking-wide text-slate-500">
                         Cliente
                       </div>
-                      <div className="mt-1 font-bold text-[14px]">
+                      <div className="mt-1 font-bold text-[16px]">
                         {props.order.cliente_nome || ""}
                       </div>
                       <div className="mt-1 text-slate-700">
@@ -2437,7 +2600,7 @@ function PreviewModal(props: {
                     </div>
 
                     <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                      <div className="text-[11px] uppercase tracking-wide text-slate-500">
+                      <div className="text-[12px] uppercase tracking-wide text-slate-500">
                         Informações
                       </div>
                       <div className="mt-1 text-slate-700">
@@ -2452,8 +2615,8 @@ function PreviewModal(props: {
                   {props.order.observacao ? (
                     <>
                       <div className="my-5 border-t border-slate-200" />
-                      <div className="rounded-md border-2 border-dashed border-slate-400 bg-white p-3 text-[13px] leading-[1.35]">
-                        <div className="text-[11px] uppercase tracking-wide text-slate-500">
+                      <div className="rounded-md border-2 border-dashed border-slate-400 bg-white p-3 text-[15px] leading-[1.45]">
+                        <div className="text-[12px] uppercase tracking-wide text-slate-500">
                           Observação
                         </div>
                         <div className="mt-1 text-slate-800 whitespace-pre-wrap">
@@ -2466,7 +2629,7 @@ function PreviewModal(props: {
                   <div className="my-5 border-t border-slate-200" />
 
                   <div className="overflow-auto">
-                    <table className="min-w-full border border-slate-300 text-[13px]">
+                    <table className="min-w-full border border-slate-300 text-[15px]">
                       <thead>
                         <tr className="bg-slate-50">
                           <th className="border-b border-slate-300 px-3 py-2 w-20 text-left font-semibold text-slate-700">
@@ -2529,10 +2692,10 @@ function PreviewModal(props: {
                       )}
 
                       <div className="mt-3 pt-2 border-t border-slate-200 flex items-center justify-between">
-                        <div className="text-[12px] uppercase tracking-wide text-slate-500">
+                        <div className="text-[13px] uppercase tracking-wide text-slate-500">
                           Total
                         </div>
-                        <div className="text-[20px] font-extrabold">
+                        <div className="text-[24px] font-extrabold">
                           {formatBRLFromNumber(totalFinal)}
                         </div>
                       </div>

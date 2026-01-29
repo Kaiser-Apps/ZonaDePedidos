@@ -494,6 +494,36 @@ export default function BillingPanel() {
     }
   };
 
+  const startTrial = async () => {
+    if (!tenantId) return;
+    setBusy(true);
+    try {
+      const token = await getAccessToken();
+      const res = await fetch("/api/billing/start-trial", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ days: 7 }),
+      });
+      const json = await res.json().catch(() => ({} as any));
+      if (!res.ok) {
+        alert(json?.message || "Erro ao iniciar trial.");
+        return;
+      }
+
+      await loadTenantBilling(tenantId);
+      await loadSummary();
+
+      // ✅ marcou ativação "AGORA" (para aparecer Começar)
+      setJustActivated(true);
+      alert("Trial de 7 dias iniciado! ✅");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (loading) return <div>Carregando...</div>;
 
   return (
@@ -574,6 +604,29 @@ export default function BillingPanel() {
           </div>
         )}
       </div>
+
+      {/* TRIAL GRÁTIS (apenas para tenant novo) */}
+      {isBrandNew ? (
+        <div className="mt-4 p-4 rounded-xl border bg-white">
+          <div className="text-sm font-extrabold">Teste grátis</div>
+          <div className="mt-1 text-sm text-slate-700">
+            Libere o sistema por <b>7 dias</b> sem pagar.
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={startTrial}
+              disabled={busy || !canStartNewSubscription}
+              className="bg-black text-white px-4 py-2 rounded-xl text-sm font-semibold hover:opacity-90 min-h-11 disabled:opacity-60"
+            >
+              {busy ? "Ativando..." : "Testar grátis 7 dias"}
+            </button>
+            <div className="text-xs text-slate-500 self-center">
+              Depois, você pode assinar a qualquer momento.
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {/* DASHBOARD */}
       {summary ? (
