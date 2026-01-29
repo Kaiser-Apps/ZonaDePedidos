@@ -51,7 +51,7 @@ export async function POST(req: Request) {
   const startedAt = Date.now();
 
   try {
-    const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
     const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
     if (!SUPABASE_URL)
@@ -344,6 +344,7 @@ export async function POST(req: Request) {
           cycle,
           status: String(subJson?.status || "").toUpperCase() || null,
           next_due_date: subJson?.nextDueDate || nextDueDate,
+          billing_status: trialDays > 0 ? "TRIAL" : "PENDING",
           updated_at: new Date().toISOString(),
         },
         { onConflict: "asaas_subscription_id" }
@@ -368,6 +369,22 @@ export async function POST(req: Request) {
 
       if (invoiceUrl) break;
       await sleep(450);
+    }
+
+    // ✅ Persistir dados do primeiro pagamento (invoiceUrl) para consulta via billing/status
+    if (paymentId || invoiceUrl) {
+      await supabaseAdmin
+        .from("asaas_subscriptions")
+        .upsert(
+          {
+            asaas_subscription_id: asaasSubscriptionId,
+            tenant_id: tenantId,
+            last_payment_id: paymentId,
+            last_invoice_url: invoiceUrl,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "asaas_subscription_id" }
+        );
     }
 
     return NextResponse.json({
