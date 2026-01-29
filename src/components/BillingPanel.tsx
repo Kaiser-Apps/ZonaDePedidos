@@ -78,7 +78,7 @@ export default function BillingPanel() {
 
   const [tenant, setTenant] = useState<TenantBilling | null>(null);
   const [busy, setBusy] = useState(false);
-  const [planBusy, setPlanBusy] = useState(false);
+  const [cancelBusy, setCancelBusy] = useState(false);
 
   const [promo, setPromo] = useState("");
   const [promoBusy, setPromoBusy] = useState(false);
@@ -106,9 +106,6 @@ export default function BillingPanel() {
 
 
   const [summary, setSummary] = useState<BillingSummary | null>(null);
-
-  // ✅ UI: assinatura ativa não deve ver opções de novos planos
-  const [editOpen, setEditOpen] = useState(false);
 
   // ✅ aparece "Começar" somente quando ativou AGORA (cupom/pagamento)
   const [justActivated, setJustActivated] = useState(false);
@@ -138,13 +135,6 @@ export default function BillingPanel() {
     return !isLifetime && !isActive && !isTrial;
   }, [isLifetime, isActive, isTrial]);
 
-  const currentPlanCycle = useMemo(() => {
-    const p = String(tenant?.plan || "").toUpperCase();
-    if (p === "YEARLY") return "YEARLY" as const;
-    if (p === "MONTHLY") return "MONTHLY" as const;
-    return "MONTHLY" as const;
-  }, [tenant]);
-
   const isInactive = useMemo(() => status === "INACTIVE", [status]);
 
   // ✅ "novo" = INACTIVE e sem datas
@@ -168,11 +158,6 @@ export default function BillingPanel() {
     // ✅ seu "pedidos" hoje está na HOME (app/page.tsx)
     router.push("/");
   };
-
-  useEffect(() => {
-    // fecha editor automaticamente quando não faz mais sentido
-    if (canStartNewSubscription) setEditOpen(false);
-  }, [canStartNewSubscription]);
 
   const loadTenantBilling = async (tId: string) => {
     console.log("[BILLING] load tenant billing", tId);
@@ -427,31 +412,36 @@ export default function BillingPanel() {
     }
   };
 
-  const changePlan = async (cycle: "MONTHLY" | "YEARLY") => {
+  const cancelSubscription = async () => {
     if (!tenantId) return;
 
-    setPlanBusy(true);
+    const ok = confirm(
+      "Cancelar assinatura agora?\n\nIsso vai desativar o acesso e você poderá assinar novamente depois."
+    );
+    if (!ok) return;
+
+    setCancelBusy(true);
     try {
       const token = await getAccessToken();
-      const res = await fetch("/api/asaas/change-plan", {
+      const res = await fetch("/api/asaas/cancel-subscription", {
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ cycle }),
       });
 
       const json = await res.json().catch(() => ({} as any));
       if (!res.ok) {
-        alert(json?.message || "Erro ao trocar plano.");
+        alert(json?.message || "Erro ao cancelar assinatura.");
         return;
       }
 
-      alert("Plano atualizado com sucesso! ✅");
+      alert("Assinatura cancelada.\n\nO status será atualizado automaticamente.");
+      setJustActivated(false);
       await loadTenantBilling(tenantId);
+      await loadSummary();
     } finally {
-      setPlanBusy(false);
+      setCancelBusy(false);
     }
   };
 
@@ -741,16 +731,17 @@ export default function BillingPanel() {
         <div className="mt-6 p-4 rounded-xl border bg-white">
           <div className="text-sm font-extrabold">Assinatura atual</div>
           <div className="mt-1 text-xs text-slate-600">
-            Sua assinatura já está ativa. Para alterar plano, clique em <b>Editar assinatura</b>.
+            Sua assinatura já está ativa.
           </div>
 
           <div className="mt-3 flex flex-wrap gap-2">
             <button
               type="button"
-              onClick={() => setEditOpen((v) => !v)}
-              className="bg-black text-white px-4 py-2 rounded-xl text-sm font-semibold hover:opacity-90 min-h-11"
+              onClick={cancelSubscription}
+              disabled={cancelBusy}
+              className="bg-rose-600 text-white px-4 py-2 rounded-xl text-sm font-semibold hover:opacity-90 min-h-11 disabled:opacity-60"
             >
-              {editOpen ? "Fechar edição" : "Editar assinatura"}
+              {cancelBusy ? "Cancelando..." : "Cancelar assinatura"}
             </button>
 
             <button
@@ -760,44 +751,6 @@ export default function BillingPanel() {
             >
               Editar dados
             </button>
-          </div>
-        </div>
-      ) : null}
-
-      {/* TROCA DE PLANO */}
-      {!isLifetime && (isActive || isTrial) && (editOpen || isTrial) ? (
-        <div className="mt-4 p-4 rounded-xl border bg-white">
-          <div className="text-sm font-extrabold">Trocar plano</div>
-          <div className="mt-1 text-xs text-slate-600">
-            Plano atual: <b>{currentPlanCycle}</b>
-          </div>
-
-          <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {currentPlanCycle !== "MONTHLY" ? (
-              <button
-                disabled={planBusy}
-                className="border px-4 py-2 rounded-xl text-sm font-semibold bg-white hover:bg-slate-50 min-h-11 disabled:opacity-60 w-full"
-                onClick={() => changePlan("MONTHLY")}
-              >
-                {planBusy ? "Atualizando..." : "Trocar para Mensal"}
-              </button>
-            ) : (
-              <div className="hidden sm:block" />
-            )}
-
-            {currentPlanCycle !== "YEARLY" ? (
-              <button
-                disabled={planBusy}
-                className="border px-4 py-2 rounded-xl text-sm font-semibold bg-white hover:bg-slate-50 min-h-11 disabled:opacity-60 w-full"
-                onClick={() => changePlan("YEARLY")}
-              >
-                {planBusy ? "Atualizando..." : "Trocar para Anual"}
-              </button>
-            ) : null}
-          </div>
-
-          <div className="mt-2 text-xs text-slate-500">
-            A mudança é aplicada na assinatura do Asaas e salva no seu banco.
           </div>
         </div>
       ) : null}
