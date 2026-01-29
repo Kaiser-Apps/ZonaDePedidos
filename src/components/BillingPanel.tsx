@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
 import { useRouter } from "next/navigation";
 
@@ -112,6 +112,9 @@ export default function BillingPanel() {
 
   // ✅ aparece "Começar" somente quando ativou AGORA (cupom/pagamento)
   const [justActivated, setJustActivated] = useState(false);
+
+  // Evita spam de refresh ao voltar do checkout (focus/visibility/pageshow)
+  const lastAutoRefreshAtRef = useRef<number>(0);
 
   const status = useMemo(
     () => (tenant?.subscription_status || "INACTIVE").toUpperCase(),
@@ -272,6 +275,54 @@ export default function BillingPanel() {
       alive = false;
     };
   }, []);
+
+  // ✅ Ao voltar do checkout (seta "voltar" do navegador), o browser pode restaurar
+  // a página do cache e manter o estado antigo. Então recarregamos o status ao
+  // focar/voltar para a aba, para esconder os botões de assinar automaticamente.
+  useEffect(() => {
+    if (!tenantId) return;
+
+    const refresh = async (reason: string) => {
+      const now = Date.now();
+      if (now - lastAutoRefreshAtRef.current < 1500) return;
+      lastAutoRefreshAtRef.current = now;
+
+      try {
+        console.log("[BILLING] auto refresh", { reason });
+        await loadTenantBilling(tenantId);
+        await loadSummary();
+      } catch (e) {
+        console.log("[BILLING] auto refresh failed", e);
+      }
+    };
+
+    const onVisibility = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "visible") {
+        refresh("visibility");
+      }
+    };
+
+    const onFocus = () => {
+      refresh("focus");
+    };
+
+    const onPageShow = (e: PageTransitionEvent) => {
+      // pageshow dispara quando volta via history (inclui BFCache)
+      refresh(e?.persisted ? "pageshow_bfcache" : "pageshow");
+    };
+
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("pageshow", onPageShow);
+    document.addEventListener("visibilitychange", onVisibility);
+
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("pageshow", onPageShow);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+    // Intencionalmente dependemos só do tenantId para não recriar listeners em todo render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tenantId]);
 
   const handleBack = () => {
     // Volta para a tela anterior se existir histórico; senão cai para HOME

@@ -102,12 +102,11 @@ export async function POST(req: Request) {
         patch.past_due_since = null;
         patch.subscription_status = "ACTIVE";
 
-        // não deixa current_period_end virar null (o que parece "vitalícia" na UI)
-        periodEnd = toIsoMaybe(payment?.dueDate) || toIsoMaybe(payment?.creditDate) || null;
-
-        if (periodEnd) {
-          patch.current_period_end = periodEnd;
-        }
+        // ✅ Próximo vencimento NÃO é o dueDate do pagamento recebido.
+        // dueDate aqui é o vencimento da cobrança que acabou de ser paga.
+        // O correto é usar subscription.nextDueDate (ou buscar na API do Asaas abaixo).
+        periodEnd = toIsoMaybe(subscription?.nextDueDate) || null;
+        if (periodEnd) patch.current_period_end = periodEnd;
       } else {
         console.log("[ASAAS WEBHOOK] ignore ACTIVE without paymentDate", {
           event,
@@ -199,7 +198,11 @@ export async function POST(req: Request) {
         else if (shouldClearPeriodEnd) upsertSub.current_period_end = null;
 
         if (subscription?.nextDueDate) upsertSub.next_due_date = toDateOnly(subscription?.nextDueDate);
-        if (payment?.dueDate) upsertSub.next_due_date = toDateOnly(payment?.dueDate);
+        // ⚠️ Não sobrescreve next_due_date com payment.dueDate quando o evento for de pagamento.
+        // (payment.dueDate é o vencimento da cobrança atual, não o próximo ciclo)
+        if (event === "PAYMENT_OVERDUE" && payment?.dueDate) {
+          upsertSub.next_due_date = toDateOnly(payment?.dueDate);
+        }
 
         if (payment?.id) upsertSub.last_payment_id = String(payment.id);
         if (payment?.invoiceUrl) upsertSub.last_invoice_url = String(payment.invoiceUrl);
@@ -257,18 +260,40 @@ export async function POST(req: Request) {
         });
         const subJson = await subRes.json();
         if (subRes.ok && subJson?.id) {
-          const { error: metaUpErr } = await supabaseAdmin.from("asaas_subscriptions").upsert({
+          const nextDueIso = toIsoMaybe(subJson.nextDueDate) || null;
+
+          const metaUpsert: any = {
             asaas_subscription_id: subJson.id,
             asaas_customer_id: subJson.customer,
             tenant_id: tenantId,
             email: subJson.customer?.email || null,
             cycle: subJson.cycle,
             status: subJson.status,
-            next_due_date: subJson.nextDueDate || null,
-            last_payment_date: subJson.lastInvoiceDate || null,
-            // não sobrescreve billing_status/current_period_end aqui; isso vem dos eventos de pagamento
+            next_due_date: toDateOnly(subJson.nextDueDate) || null,
+            last_payment_date: toDateOnly(subJson.lastInvoiceDate) || null,
             updated_at: new Date().toISOString(),
-          }, { onConflict: "asaas_subscription_id" });
+
+            // ✅ quando o pagamento foi confirmado/recebido, podemos atualizar o próximo vencimento
+            // usando nextDueDate (fonte correta do Asaas).
+            ...(newStatus === "ACTIVE" && nextDueIso
+              ? { billing_status: "ACTIVE", current_period_end: nextDueIso }
+              : {}),
+          };
+
+          const { error: metaUpErr } = await supabaseAdmin
+            .from("asaas_subscriptions")
+            .upsert(metaUpsert, { onConflict: "asaas_subscription_id" });
+
+          // Espelha no tenant somente quando já estamos marcando ACTIVE via evento de pagamento.
+          if (newStatus === "ACTIVE" && nextDueIso) {
+            const { error: tDueErr } = await supabaseAdmin
+              .from("tenants")
+              .update({ current_period_end: nextDueIso })
+              .eq("id", tenantId);
+            if (tDueErr) {
+              console.log("[ASAAS WEBHOOK] tenants current_period_end update failed:", tDueErr);
+            }
+          }
 
           if (metaUpErr) {
             console.log("[ASAAS WEBHOOK] asaas_subscriptions meta upsert failed:", metaUpErr);
