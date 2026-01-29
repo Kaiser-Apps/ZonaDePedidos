@@ -142,13 +142,50 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         }
 
         if (!profile?.tenant_id) {
-          console.log("[APP SHELL] no profile/tenant_id for user:", userId);
-          router.replace("/login");
-          return;
-        }
+          // ✅ Caso clássico: signup exige confirmação de email.
+          // A conta existe, mas o tenant/profile ainda não foi criado.
+          // Tentamos auto-vincular usando user_metadata.tenantName.
+          try {
+            const token = sessionData.session.access_token;
+            const ensureRes = await fetch("/api/auth/ensure-tenant", {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${token}`,
+              },
+            });
+            const ensureJson: unknown = await ensureRes.json().catch(() => ({}));
+            if (!ensureRes.ok) {
+              console.log("[APP SHELL] ensure-tenant failed:", ensureJson);
+              router.replace("/cadastro");
+              return;
+            }
 
-        const role = String(profile?.role || "").toLowerCase();
-        setIsAdmin(role === "admin");
+            const { data: profile2, error: profErr2 } = await supabase
+              .from("profiles")
+              .select("tenant_id, role")
+              .eq("user_id", userId)
+              .maybeSingle();
+
+            if (profErr2 || !profile2?.tenant_id) {
+              console.log("[APP SHELL] still no profile/tenant_id after ensure:", {
+                profErr2,
+                ensureJson,
+              });
+              router.replace("/cadastro");
+              return;
+            }
+
+            const role2 = String(profile2?.role || "").toLowerCase();
+            setIsAdmin(role2 === "admin");
+          } catch (e) {
+            console.log("[APP SHELL] ensure-tenant unexpected:", e);
+            router.replace("/cadastro");
+            return;
+          }
+        } else {
+          const role = String(profile?.role || "").toLowerCase();
+          setIsAdmin(role === "admin");
+        }
 
         const token = sessionData.session.access_token;
         const res = await fetch("/api/billing/status", {
@@ -206,7 +243,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   const st = (tenantBilling?.subscription_status || "INACTIVE").toUpperCase();
-  const canGoToPedidos = isAccessAllowed(tenantBilling);
+  // Requisito: só navega pelo ícone Z quando a assinatura está ATIVA
+  const canGoToPedidos = st === "ACTIVE";
   const badge =
     st === "ACTIVE"
       ? { cls: "bg-emerald-50 text-emerald-700 border-emerald-200", text: "Ativa" }

@@ -14,12 +14,11 @@ type CapacityInfo = {
 };
 
 function getAuthErrInfo(err: unknown) {
-  const message = String(err?.message || "");
   const asObj = (typeof err === "object" && err !== null
     ? (err as Record<string, unknown>)
     : null);
 
-  const message = String(asObj?.message ?? "");
+  const message = String(asObj?.message ?? (err as { message?: unknown })?.message ?? "");
   const status = asObj?.status;
   const code = asObj?.code;
   return { message, status, code };
@@ -57,7 +56,6 @@ export default function CadastroPage() {
         setCapacityMsg(
           String(json?.message || "Não foi possível verificar a capacidade.")
         );
-      } catch (e: any) {
       } catch (e: unknown) {
         if (cancelled) return;
         setCapacity(null);
@@ -83,7 +81,7 @@ export default function CadastroPage() {
       body: JSON.stringify({ tenantName }),
     });
 
-    const json = await res.json().catch(() => ({} as any));
+    const json: unknown = await res.json().catch(() => ({}));
 
     if (!res.ok) {
       console.log("[CADASTRO] register tenant error:", {
@@ -94,7 +92,7 @@ export default function CadastroPage() {
       // ✅ limite global de contas
       if (res.status === 403) {
         throw new Error(
-          json?.message ||
+          String((json as { message?: unknown })?.message) ||
             "Limite de contas atingido no momento. Fale com o suporte."
         );
       }
@@ -102,12 +100,14 @@ export default function CadastroPage() {
       // ✅ quando o backend devolve 409: usuário já possui tenant
       if (res.status === 409) {
         throw new Error(
-          json?.message ||
+          String((json as { message?: unknown })?.message) ||
             "Este e-mail já possui empresa cadastrada. Faça login."
         );
       }
 
-      throw new Error(json?.message || "Falha ao criar empresa.");
+      throw new Error(
+        String((json as { message?: unknown })?.message) || "Falha ao criar empresa."
+      );
     }
 
     console.log("[CADASTRO] register tenant ok:", json);
@@ -141,11 +141,15 @@ export default function CadastroPage() {
     setBusy(true);
     try {
       console.log("[CADASTRO] signUp", { email: e, tenantName });
-          const info = getAuthErrInfo(signUpErr);
       const { data: signUpData, error: signUpErr } =
         await supabase.auth.signUp({
           email: e,
           password: senha,
+          options: {
+            data: {
+              tenantName,
+            },
+          },
         });
 
       if (signUpErr) {
@@ -264,8 +268,8 @@ export default function CadastroPage() {
       // ✅ cria tenant + profile via API server (service role)
       try {
         await registerTenant(accessToken, tenantName);
-      } catch (e: any) {
-        const msg = String(e?.message || e);
+      } catch (e: unknown) {
+        const msg = String((e as { message?: unknown })?.message ?? e);
 
         // ✅ se já existe tenant para esse usuário, manda pro login
         if (
@@ -279,7 +283,7 @@ export default function CadastroPage() {
           return;
         }
 
-        alert(err instanceof Error ? err.message : String(err));
+        alert(e instanceof Error ? e.message : String(e));
         throw e;
       }
 
@@ -295,16 +299,15 @@ export default function CadastroPage() {
 
   return (
     <div className="min-h-screen bg-[#F3F7F4] flex items-center justify-center p-4">
+
       <div className="w-full max-w-md bg-white border rounded-2xl shadow-sm p-6">
         <div className="flex items-center gap-3">
-          <div className="h-10 w-10 rounded-2xl bg-linear-to-br from-emerald-600 to-green-500 flex items-center justify-center shadow-sm">
+          <div className="h-10 w-10 rounded-2xl bg-gradient-to-br from-emerald-600 to-green-500 flex items-center justify-center shadow-sm">
             <span className="text-white font-extrabold">Z</span>
           </div>
           <div>
             <div className="text-lg font-extrabold">Criar conta</div>
-            <div className="text-xs text-slate-500">
-              Comece a usar o Zona de Pedidos
-            </div>
+            <div className="text-xs text-slate-500">Comece a usar o Zona de Pedidos</div>
           </div>
         </div>
 
