@@ -117,6 +117,7 @@ export default function ClientesPanel() {
 
   const [form, setForm] = useState<ClientForm>(emptyForm);
   const [saving, setSaving] = useState(false);
+  const [formOpen, setFormOpen] = useState(false);
 
   const isEdit = useMemo(() => Boolean(form.id), [form.id]);
 
@@ -215,6 +216,17 @@ export default function ClientesPanel() {
 
   const resetForm = () => setForm(emptyForm);
 
+  const openNewClient = () => {
+    resetForm();
+    setFormOpen(true);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const closeForm = () => {
+    resetForm();
+    setFormOpen(false);
+  };
+
   const pickRow = (r: ClientRow) => {
     // OBS: no banco agora vamos salvar só números; então ao editar, a máscara vai reaplicar.
     setForm({
@@ -226,6 +238,7 @@ export default function ClientesPanel() {
       cnpj: maskCNPJ(r.cnpj || ""),
       ie: r.ie || "",
     });
+    setFormOpen(true);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
@@ -236,7 +249,15 @@ export default function ClientesPanel() {
 
     if (error) {
       console.log("delete client error:", error);
-      alert("Erro ao excluir: " + error.message);
+      const msg = (error.message || "").toLowerCase();
+      if (msg.includes('new" has no field "updated_at') || msg.includes("has no field \"updated_at\"")) {
+        alert(
+          "Erro ao excluir: seu banco parece ter um trigger antigo que referencia a coluna updated_at, mas a coluna foi removida.\n\n" +
+            "Corrija rodando o script: supabase/fix_clients_orders_updated_at_triggers.sql (no SQL Editor do Supabase)."
+        );
+      } else {
+        alert("Erro ao excluir: " + error.message);
+      }
       return;
     }
 
@@ -256,6 +277,27 @@ export default function ClientesPanel() {
     const telefoneNorm = onlyDigits(nf.telefone);
     const cpfNorm = onlyDigits(nf.cpf);
     const cnpjNorm = onlyDigits(nf.cnpj);
+
+    // ✅ espelha a regra de CPF: não permitir telefone repetido por tenant
+    // (mantém UX boa mesmo se o índice único ainda não estiver aplicado no banco)
+    {
+      const dupQuery = supabase
+        .from("clients")
+        .select("id")
+        .eq("tenant_id", ctx.tenantId)
+        .eq("telefone", telefoneNorm)
+        .limit(1);
+
+      const { data: dupRows, error: dupErr } = isEdit && form.id
+        ? await dupQuery.neq("id", form.id)
+        : await dupQuery;
+
+      if (dupErr) {
+        console.log("dup telefone check error:", dupErr);
+      } else if ((dupRows || []).length > 0) {
+        return alert("Telefone já cadastrado para esta empresa.");
+      }
+    }
 
     setSaving(true);
 
@@ -304,6 +346,7 @@ export default function ClientesPanel() {
       }
 
       resetForm();
+      setFormOpen(false);
       await loadClients();
     } finally {
       setSaving(false);
@@ -333,29 +376,79 @@ export default function ClientesPanel() {
 
   return (
     <div className="space-y-4">
-      {/* FORM */}
+      {/* HEADER / ACTIONS */}
       <div className="border rounded p-4">
-        <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div>
-            <div className="font-bold text-lg">
-              {isEdit ? "Editar Cliente" : "Cadastrar Cliente"}
-            </div>
-            <div className="text-sm text-gray-600">
-              Empresa (tenant): {ctx.tenantId}
-            </div>
+            <div className="font-semibold">Clientes</div>
+            <div className="text-sm text-gray-600"></div>
           </div>
 
           <div className="flex gap-2">
-            {isEdit && (
+            <button onClick={openNewClient} className="bg-black text-white px-3 py-2 rounded">
+              Novo cliente
+            </button>
+            {formOpen && (
               <button
-                onClick={resetForm}
+                onClick={closeForm}
                 className="border px-3 py-2 rounded"
                 disabled={saving}
               >
-                Cancelar edição
+                Fechar ficha
               </button>
             )}
+          </div>
+        </div>
+      </div>
 
+      {/* FORM (FICHA) */}
+      {formOpen && (
+        <div className="border rounded p-4">
+          <div className="font-bold text-lg">
+            {isEdit ? "Editar Cliente" : "Cadastrar Cliente"}
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4">
+            <Field
+              label="Telefone *"
+              value={form.telefone}
+              onChange={(v) => setForm((s) => ({ ...s, telefone: maskPhone(v) }))}
+              placeholder="(11) 99999-9999"
+            />
+            <Field
+              label="Nome *"
+              value={form.nome}
+              onChange={(v) => setForm((s) => ({ ...s, nome: v }))}
+              placeholder="Nome do cliente"
+            />
+            <Field
+              label="Endereço"
+              value={form.endereco}
+              onChange={(v) => setForm((s) => ({ ...s, endereco: v }))}
+              placeholder="Rua, número, bairro..."
+            />
+            <Field
+              label="CPF"
+              value={form.cpf}
+              onChange={(v) => setForm((s) => ({ ...s, cpf: maskCPF(v) }))}
+              placeholder="000.000.000-00"
+            />
+            <Field
+              label="CNPJ"
+              value={form.cnpj}
+              onChange={(v) => setForm((s) => ({ ...s, cnpj: maskCNPJ(v) }))}
+              placeholder="00.000.000/0000-00"
+            />
+            <Field
+              label="IE"
+              value={form.ie}
+              onChange={(v) => setForm((s) => ({ ...s, ie: v }))}
+              placeholder="Inscrição estadual"
+            />
+          </div>
+
+          {/* BOTÕES (ABAIXO, LADO ESQUERDO) */}
+          <div className="flex gap-2 mt-4 justify-start">
             <button
               onClick={save}
               className="bg-black text-white px-3 py-2 rounded"
@@ -363,53 +456,17 @@ export default function ClientesPanel() {
             >
               {saving ? "Salvando..." : isEdit ? "Atualizar" : "Salvar"}
             </button>
+
+            <button
+              onClick={closeForm}
+              className="border px-3 py-2 rounded"
+              disabled={saving}
+            >
+              Cancelar
+            </button>
           </div>
         </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4">
-          <Field
-            label="Telefone *"
-            value={form.telefone}
-            onChange={(v) => setForm((s) => ({ ...s, telefone: maskPhone(v) }))}
-            placeholder="(11) 99999-9999"
-          />
-          <Field
-            label="Nome *"
-            value={form.nome}
-            onChange={(v) => setForm((s) => ({ ...s, nome: v }))}
-            placeholder="Nome do cliente"
-          />
-          <Field
-            label="Endereço"
-            value={form.endereco}
-            onChange={(v) => setForm((s) => ({ ...s, endereco: v }))}
-            placeholder="Rua, número, bairro..."
-          />
-          <Field
-            label="CPF"
-            value={form.cpf}
-            onChange={(v) => setForm((s) => ({ ...s, cpf: maskCPF(v) }))}
-            placeholder="000.000.000-00"
-          />
-          <Field
-            label="CNPJ"
-            value={form.cnpj}
-            onChange={(v) => setForm((s) => ({ ...s, cnpj: maskCNPJ(v) }))}
-            placeholder="00.000.000/0000-00"
-          />
-          <Field
-            label="IE"
-            value={form.ie}
-            onChange={(v) => setForm((s) => ({ ...s, ie: v }))}
-            placeholder="Inscrição estadual"
-          />
-        </div>
-
-        <div className="text-xs text-gray-500 mt-3">
-          Dica: duplicidade é travada por empresa (telefone/CPF/CNPJ), igual no seu
-          Apps Script.
-        </div>
-      </div>
+      )}
 
       {/* LIST + SEARCH */}
       <div className="border rounded p-4">

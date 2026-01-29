@@ -209,7 +209,7 @@ export default function AdminUsuariosPage() {
         return;
       }
     } catch {}
-    router.push("/pedidos");
+    router.push("/");
   };
 
   return (

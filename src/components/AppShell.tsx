@@ -84,6 +84,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [tenantBilling, setTenantBilling] = useState<TenantBilling | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
 
   const activeKey = useMemo(() => {
@@ -126,6 +127,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           return;
         }
 
+        setUserEmail(userData?.user?.email || null);
+
         const { data: profile, error: profErr } = await supabase
           .from("profiles")
           .select("tenant_id, role")
@@ -154,19 +157,20 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             Authorization: `Bearer ${token}`,
           },
         });
-        type BillingStatusResponse = {
-          tenantBilling?: TenantBilling | null;
-        };
-        const json = (await res
-          .json()
-          .catch(() => ({}))) as unknown as BillingStatusResponse;
+        type BillingStatusResponse = { tenantBilling?: TenantBilling | null };
+        let json: BillingStatusResponse = {};
+        try {
+          json = (await res.json()) as BillingStatusResponse;
+        } catch {
+          json = {};
+        }
         if (!res.ok) {
           console.log("[APP SHELL] billing/status error:", json);
           setTenantBilling(null);
           return;
         }
 
-        const t = (json?.tenantBilling as TenantBilling) || null;
+        const t = json?.tenantBilling ?? null;
         setTenantBilling(t);
 
         if (!pathname?.startsWith("/assinatura")) {
@@ -217,32 +221,43 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       <header className="sticky top-0 z-50 border-b bg-white/90 backdrop-blur">
         <div className="mx-auto max-w-6xl px-4 py-3">
           <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={() => {
-                if (!canGoToPedidos) return;
-                router.push("/");
-              }}
-              className={[
-                "flex items-center gap-3 min-w-0 text-left",
-                canGoToPedidos ? "cursor-pointer" : "cursor-default",
-              ].join(" ")}
-              aria-label={
-                canGoToPedidos
-                  ? "Ir para cadastro de pedidos"
-                  : "Assinatura inativa"
-              }
-            >
-              <div className="h-10 w-10 rounded-2xl bg-emerald-600 flex items-center justify-center text-white font-extrabold">
+            <div className="flex items-center gap-3 min-w-0">
+              <button
+                type="button"
+                onClick={() => {
+                  if (!canGoToPedidos) return;
+                  router.push("/?novo=1");
+                }}
+                disabled={!canGoToPedidos}
+                className={[
+                  "h-10 w-10 rounded-2xl bg-emerald-600 flex items-center justify-center",
+                  "text-white font-extrabold",
+                  canGoToPedidos
+                    ? "cursor-pointer hover:opacity-90"
+                    : "cursor-default opacity-80",
+                ].join(" ")}
+                aria-label={canGoToPedidos ? "Ir para pedidos" : "Assinatura inativa"}
+                title={canGoToPedidos ? "Ir para pedidos" : "Assinatura inativa"}
+              >
                 Z
-              </div>
+              </button>
+
               <div className="min-w-0">
                 <div className="font-extrabold truncate">Zona de Pedidos</div>
                 <div className="text-xs text-slate-500 truncate">Painel de gestão</div>
               </div>
-            </button>
+            </div>
 
             <div className="flex-1" />
+
+            {userEmail && (
+              <div
+                className="hidden md:block text-xs text-slate-600 truncate max-w-60"
+                title={userEmail}
+              >
+                {userEmail}
+              </div>
+            )}
 
             {isAdmin && (
               <button
@@ -313,6 +328,12 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           {mobileOpen && (
             <div className="sm:hidden mt-3 border rounded-2xl bg-white shadow-sm p-3">
               <div className="grid gap-2">
+                {userEmail && (
+                  <div className="px-3 py-2 text-xs text-slate-600 truncate" title={userEmail}>
+                    {userEmail}
+                  </div>
+                )}
+
                 {isAdmin && (
                   <button
                     onClick={() => {

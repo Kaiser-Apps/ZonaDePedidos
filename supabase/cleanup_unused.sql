@@ -78,6 +78,33 @@ alter table public.asaas_payments
   drop column if exists created_at;
 
 -- clients/orders: app does not use updated_at columns
+-- NOTE: if your schema has an old trigger that sets updated_at, dropping the column
+-- without dropping the trigger will break DELETE/UPDATE with:
+--   record "new" has no field "updated_at"
+-- This block removes any such triggers only on clients/orders.
+DO $$
+DECLARE
+  tr record;
+BEGIN
+  FOR tr IN (
+    SELECT
+      c.relname as table_name,
+      t.tgname as trigger_name
+    FROM pg_trigger t
+    JOIN pg_class c ON c.oid = t.tgrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public'
+      AND c.relname IN ('clients', 'orders')
+      AND NOT t.tgisinternal
+      AND (
+        pg_get_triggerdef(t.oid) ILIKE '%updated_at%'
+        OR pg_get_functiondef(t.tgfoid) ILIKE '%updated_at%'
+      )
+  ) LOOP
+    EXECUTE format('DROP TRIGGER IF EXISTS %I ON public.%I;', tr.trigger_name, tr.table_name);
+  END LOOP;
+END $$;
+
 alter table public.clients
   drop column if exists updated_at;
 

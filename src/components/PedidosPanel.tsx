@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { supabase } from "../lib/supabaseClient";
 import {
   Trash2,
@@ -36,6 +37,12 @@ type ClientMini = {
   telefone: string;
 };
 
+type ProductMini = {
+  id: string;
+  nome: string;
+  client_id: string | null;
+};
+
 type DiscountType = "none" | "percent" | "amount";
 
 type OrderRow = {
@@ -50,7 +57,10 @@ type OrderRow = {
   cliente_telefone: string | null;
 
   item: string | null;
+  produto: string | null;
+  product_id: string | null;
   descricao: string | null;
+  observacao: string | null;
 
   // ✅ valor final (com desconto)
   valor: number;
@@ -74,7 +84,10 @@ type OrderForm = {
   cliente_telefone: string;
 
   item: string;
+  produto: string;
+  product_id: string;
   descricao: string;
+  observacao: string;
 
   // ✅ este campo na UI representa o BRUTO (antes do desconto)
   valor: string;
@@ -302,6 +315,7 @@ function buildShareText(order: OrderRow, tenant: TenantInfo | null) {
     headline,
     `Data: ${order.dt_entrada}`,
     "",
+    order.produto ? `Produto: ${order.produto}` : "",
     order.item ? `Item: ${order.item}` : "",
     "Itens:",
     ...(itens.length > 0
@@ -309,6 +323,7 @@ function buildShareText(order: OrderRow, tenant: TenantInfo | null) {
           (it) => `- ${it.n}) ${it.desc} — ${formatBRLFromNumber(it.value)}`
         )
       : ["- 1) —"]),
+    order.observacao ? `Observação: ${order.observacao}` : "",
     "",
     `SUBTOTAL: ${formatBRLFromNumber(subtotal)}`,
     discount > 0
@@ -422,11 +437,27 @@ function openPrintWindow(order: OrderRow, tenant: TenantInfo | null) {
       }</div>
     </div>
 
+    ${
+      order.produto
+        ? `<div class="muted" style="margin-top:8px;"><b>Produto:</b> ${escapeHtml(
+            order.produto
+          )}</div>`
+        : ""
+    }
+
     <div class="hr"></div>
 
     <div style="text-align:center; font-weight:700; margin: 6px 0;">
       ${escapeHtml(order.item || "")}
     </div>
+
+    ${
+      order.observacao
+        ? `<div class="muted avoid-break" style="margin: 10px 0; padding: 8px; border: 2px dashed #111; border-radius: 6px;">
+            <b>Observação:</b> ${escapeHtml(order.observacao)}
+           </div>`
+        : ""
+    }
 
     <div class="hr"></div>
 
@@ -525,7 +556,10 @@ const emptyForm = (): OrderForm => ({
   cliente_telefone: "",
 
   item: "",
+  produto: "",
+  product_id: "",
   descricao: "",
+  observacao: "",
 
   valor: "",
 
@@ -536,6 +570,8 @@ const emptyForm = (): OrderForm => ({
 });
 
 export default function PedidosPanel() {
+  const searchParams = useSearchParams();
+
   const [ctx, setCtx] = useState<TenantCtx | null>(null);
   const [ctxLoading, setCtxLoading] = useState(true);
 
@@ -549,12 +585,18 @@ export default function PedidosPanel() {
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [orders, setOrders] = useState<OrderRow[]>([]);
 
+  const [orderSearch, setOrderSearch] = useState("");
+  const [orderSearchDebounced, setOrderSearchDebounced] = useState("");
+  const orderSearchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const [statusCounts, setStatusCounts] = useState<Record<string, number>>({});
   const [statusCountsLoading, setStatusCountsLoading] = useState(false);
 
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState<OrderForm>(emptyForm());
   const isEdit = useMemo(() => Boolean(form.id), [form.id]);
+
+  const [formOpen, setFormOpen] = useState(false);
 
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewOrder, setPreviewOrder] = useState<OrderRow | null>(null);
@@ -564,6 +606,41 @@ export default function PedidosPanel() {
   const [clientOptions, setClientOptions] = useState<ClientMini[]>([]);
   const [showClientDropdown, setShowClientDropdown] = useState(false);
   const debounceRef = useRef<any>(null);
+
+  const [products, setProducts] = useState<ProductMini[]>([]);
+  const [productsLoading, setProductsLoading] = useState(false);
+
+  const normalizeName = (v: string) =>
+    String(v || "")
+      .trim()
+      .replace(/\s+/g, " ")
+      .toLowerCase();
+
+  const findProductByName = (name: string) => {
+    const key = normalizeName(name);
+    if (!key) return null;
+    return (
+      products.find((p) => normalizeName(p.nome) === key) ||
+      products.find((p) => normalizeName(p.nome).includes(key)) ||
+      null
+    );
+  };
+
+  useEffect(() => {
+    if (orderSearchDebounceRef.current) {
+      clearTimeout(orderSearchDebounceRef.current);
+    }
+
+    orderSearchDebounceRef.current = setTimeout(() => {
+      setOrderSearchDebounced(orderSearch.trim());
+    }, 250);
+
+    return () => {
+      if (orderSearchDebounceRef.current) {
+        clearTimeout(orderSearchDebounceRef.current);
+      }
+    };
+  }, [orderSearch]);
 
   useEffect(() => {
     let alive = true;
@@ -648,28 +725,88 @@ export default function PedidosPanel() {
     loadTenant();
   }, [ctx?.tenantId]);
 
-  const loadStatusCounts = async () => {
+  useEffect(() => {
+    let alive = true;
+
+    const loadProducts = async () => {
+      if (!ctx?.tenantId) return;
+
+      setProductsLoading(true);
+      const { data, error } = await supabase
+        .from("products")
+        .select("id, nome, client_id")
+        .eq("tenant_id", ctx.tenantId)
+        .order("created_at", { ascending: false })
+        .limit(300);
+
+      if (!alive) return;
+      setProductsLoading(false);
+
+      if (error) {
+        console.log("[PEDIDOS] load products error:", error);
+        setProducts([]);
+        return;
+      }
+
+      setProducts((data || []) as ProductMini[]);
+    };
+
+    loadProducts();
+    return () => {
+      alive = false;
+    };
+  }, [ctx?.tenantId]);
+
+  const buildOrdersOrFilter = (qRaw: string) => {
+    const q = String(qRaw || "")
+      .replace(/[,]/g, " ")
+      .replace(/[%_]/g, " ")
+      .trim();
+    if (!q) return null;
+
+    const pat = `%${q}%`;
+    const parts = [
+      `cliente_nome.ilike.${pat}`,
+      `cliente_telefone.ilike.${pat}`,
+      `item.ilike.${pat}`,
+      `produto.ilike.${pat}`,
+      `descricao.ilike.${pat}`,
+      `observacao.ilike.${pat}`,
+    ];
+
+    const digits = onlyDigits(q);
+    if (digits.length >= 2 && digits !== q) {
+      parts.push(`cliente_telefone.ilike.%${digits}%`);
+    }
+
+    return parts.join(",");
+  };
+
+  const loadStatusCounts = async (qRaw?: string) => {
     if (!ctx) return;
 
     setStatusCountsLoading(true);
 
     try {
-      const { data, error } = await supabase
-        .from("orders")
-        .select("status")
-        .eq("tenant_id", ctx.tenantId)
-        .limit(5000);
-
-      if (error) {
-        console.log("[PEDIDOS] loadStatusCounts error:", error);
-        return;
-      }
-
       const map: Record<string, number> = {};
-      for (const row of (data || []) as any[]) {
-        const s = String(row.status || "");
-        if (!s) continue;
-        map[s] = (map[s] || 0) + 1;
+      const ors = qRaw ? buildOrdersOrFilter(qRaw) : null;
+
+      for (const st of STATUSES) {
+        let q = supabase
+          .from("orders")
+          .select("id", { count: "exact", head: true })
+          .eq("tenant_id", ctx.tenantId)
+          .eq("status", st);
+
+        if (ors) q = q.or(ors);
+
+        const { error, count } = await q;
+        if (error) {
+          console.log("[PEDIDOS] loadStatusCounts error:", error);
+          continue;
+        }
+
+        map[st] = count || 0;
       }
 
       setStatusCounts(map);
@@ -686,17 +823,23 @@ export default function PedidosPanel() {
     }
   };
 
-  const loadOrders = async (status: string) => {
+  const loadOrders = async (status: string, qRaw?: string) => {
     if (!ctx) return;
     setOrdersLoading(true);
 
-    const { data, error } = await supabase
+    const ors = qRaw ? buildOrdersOrFilter(qRaw) : null;
+
+    let q = supabase
       .from("orders")
       .select(
-        "id, created_at, dt_entrada, dt_saida, client_id, cliente_nome, cliente_telefone, item, descricao, valor, valor_bruto, desconto_tipo, desconto_valor, status"
+        "id, created_at, dt_entrada, dt_saida, client_id, cliente_nome, cliente_telefone, item, produto, product_id, descricao, observacao, valor, valor_bruto, desconto_tipo, desconto_valor, status"
       )
       .eq("tenant_id", ctx.tenantId)
-      .eq("status", status)
+      .eq("status", status);
+
+    if (ors) q = q.or(ors);
+
+    const { data, error } = await q
       .order("dt_entrada", { ascending: false })
       .order("created_at", { ascending: false })
       .limit(300);
@@ -714,10 +857,10 @@ export default function PedidosPanel() {
 
   useEffect(() => {
     if (!ctx) return;
-    loadStatusCounts();
-    loadOrders(statusTab);
+    loadStatusCounts(orderSearchDebounced);
+    loadOrders(statusTab, orderSearchDebounced);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ctx, statusTab]);
+  }, [ctx, statusTab, orderSearchDebounced]);
 
   const resetForm = () => {
     setForm(emptyForm());
@@ -725,6 +868,20 @@ export default function PedidosPanel() {
     setClientOptions([]);
     setShowClientDropdown(false);
   };
+
+  const openNewOrder = () => {
+    resetForm();
+    setFormOpen(true);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  useEffect(() => {
+    const novo = searchParams.get("novo");
+    if (novo === "1" && !formOpen) {
+      openNewOrder();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, formOpen]);
 
   const pickOrderToEdit = (o: OrderRow) => {
     const bruto = o.valor_bruto != null ? Number(o.valor_bruto) : Number(o.valor || 0);
@@ -752,7 +909,10 @@ export default function PedidosPanel() {
       cliente_nome: o.cliente_nome || "",
       cliente_telefone: o.cliente_telefone ? maskPhone(o.cliente_telefone) : "",
       item: o.item || "",
+      produto: o.produto || "",
+      product_id: o.product_id || "",
       descricao: o.descricao || "",
+      observacao: o.observacao || "",
       valor: valorMasked,
       desconto_tipo: descontoTipo,
       desconto_valor: descontoValor,
@@ -761,6 +921,7 @@ export default function PedidosPanel() {
 
     setClientQ(o.cliente_nome || "");
     setShowClientDropdown(false);
+    setFormOpen(true);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
@@ -786,8 +947,8 @@ export default function PedidosPanel() {
 
     if (form.id === o.id) resetForm();
 
-    await loadOrders(statusTab);
-    await loadStatusCounts();
+    await loadOrders(statusTab, orderSearchDebounced);
+    await loadStatusCounts(orderSearchDebounced);
   };
 
   const searchClients = async (query: string) => {
@@ -827,11 +988,30 @@ export default function PedidosPanel() {
     setClientQ(v);
     setShowClientDropdown(true);
 
-    setForm((s) => ({
-      ...s,
-      cliente_nome: v,
-      client_id: s.client_id,
-    }));
+    const digits = onlyDigits(v);
+    const looksLikePhone = digits.length >= 10 && digits.length <= 11 && !/[a-zA-Z]/.test(v);
+
+    // Quando o usuário digita, ele pode estar:
+    // - procurando outro cliente existente; ou
+    // - criando um cliente novo.
+    // Em ambos os casos, não podemos manter um client_id antigo selecionado.
+    setForm((s) => {
+      const hadSelected = Boolean((s.client_id || "").trim());
+
+      return {
+        ...s,
+        client_id: "",
+        // Se for um telefone (busca por telefone), não trata como nome.
+        cliente_nome: looksLikePhone ? "" : v,
+        // Se estava com cliente selecionado e começou a digitar outro, evita
+        // carregar o telefone antigo para o novo cadastro.
+        cliente_telefone: looksLikePhone
+          ? maskPhone(digits)
+          : hadSelected
+          ? ""
+          : s.cliente_telefone,
+      };
+    });
 
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => searchClients(v), 250);
@@ -855,19 +1035,36 @@ export default function PedidosPanel() {
     cliente_nome: string;
     cliente_telefone: string;
     currentClientId: string;
-  }): Promise<{ clientId: string; telefoneNorm: string | null }> => {
+  }): Promise<{
+    clientId: string;
+    telefoneNorm: string | null;
+    existed: boolean;
+    clientNome: string | null;
+  }> => {
     const current = (args.currentClientId || "").trim();
     if (current) {
       const telNorm = args.cliente_telefone
         ? onlyDigits(args.cliente_telefone)
         : "";
-      return { clientId: current, telefoneNorm: telNorm || null };
+      return {
+        clientId: current,
+        telefoneNorm: telNorm || null,
+        existed: false,
+        clientNome: null,
+      };
     }
 
-    const nome = (args.cliente_nome || "").trim();
+    const nomeRaw = (args.cliente_nome || "").trim();
     const telefoneNorm = args.cliente_telefone
       ? onlyDigits(args.cliente_telefone)
       : "";
+
+    // Se o usuário digitou o telefone no campo de nome (ex: "11999998888"),
+    // evita cadastrar o cliente com o nome sendo o próprio telefone.
+    const nomeDigits = onlyDigits(nomeRaw);
+    const nomeLooksLikePhone =
+      nomeDigits.length >= 10 && nomeDigits.length <= 11 && nomeDigits === telefoneNorm;
+    const nome = nomeLooksLikePhone ? "" : nomeRaw;
 
     if (!telefoneNorm) {
       throw new Error(
@@ -877,7 +1074,7 @@ export default function PedidosPanel() {
 
     const { data: found, error: findErr } = await supabase
       .from("clients")
-      .select("id, telefone")
+      .select("id, nome, telefone")
       .eq("tenant_id", args.tenantId)
       .eq("telefone", telefoneNorm)
       .maybeSingle();
@@ -887,7 +1084,13 @@ export default function PedidosPanel() {
     }
 
     if (found?.id) {
-      return { clientId: String(found.id), telefoneNorm };
+      const existingNome = String((found as any)?.nome || "").trim();
+      return {
+        clientId: String(found.id),
+        telefoneNorm,
+        existed: true,
+        clientNome: existingNome || null,
+      };
     }
 
     const insertPayload = {
@@ -912,13 +1115,19 @@ export default function PedidosPanel() {
       if (isDuplicateErr(insErr)) {
         const { data: found2 } = await supabase
           .from("clients")
-          .select("id")
+          .select("id, nome")
           .eq("tenant_id", args.tenantId)
           .eq("telefone", telefoneNorm)
           .maybeSingle();
 
         if (found2?.id) {
-          return { clientId: String(found2.id), telefoneNorm };
+          const existingNome2 = String((found2 as any)?.nome || "").trim();
+          return {
+            clientId: String(found2.id),
+            telefoneNorm,
+            existed: true,
+            clientNome: existingNome2 || null,
+          };
         }
       }
 
@@ -930,7 +1139,12 @@ export default function PedidosPanel() {
       throw new Error("Cliente não retornou ID após cadastro.");
     }
 
-    return { clientId: String(inserted.id), telefoneNorm };
+    return {
+      clientId: String(inserted.id),
+      telefoneNorm,
+      existed: false,
+      clientNome: nome || "Sem nome",
+    };
   };
 
   const save = async () => {
@@ -939,8 +1153,21 @@ export default function PedidosPanel() {
     const dt_entrada = (form.dt_entrada || "").trim();
     if (!dt_entrada) return alert("Preencha a data de entrada.");
 
-    const cliente_nome = (form.cliente_nome || clientQ || "").trim();
-    if (!cliente_nome) return alert("Selecione ou digite o cliente.");
+    const clientQTrim = (clientQ || "").trim();
+    const nomeDigitado = (form.cliente_nome || "").trim();
+
+    const qDigits = onlyDigits(clientQTrim);
+    const qLooksLikePhone = qDigits.length >= 10 && qDigits.length <= 11 && !/[a-zA-Z]/.test(clientQTrim);
+    const telefoneFromQ = qLooksLikePhone ? qDigits : "";
+
+    // Nome só vem do campo de nome (ou do clientQ quando não for telefone)
+    const cliente_nome_input = nomeDigitado || (qLooksLikePhone ? "" : clientQTrim);
+
+    // Para cliente novo: precisa de telefone (ou selecionado via client_id)
+    const telefoneProvided = Boolean(onlyDigits(form.cliente_telefone || "") || telefoneFromQ);
+    if (!form.client_id && !cliente_nome_input && !telefoneProvided) {
+      return alert("Selecione ou digite o cliente (nome ou telefone).");
+    }
 
     const valorBruto = parseBRLToNumber(form.valor);
     if (valorBruto <= 0) return alert("Preencha um valor maior que zero.");
@@ -977,18 +1204,49 @@ export default function PedidosPanel() {
       let finalTelefoneNorm: string | null = form.cliente_telefone
         ? onlyDigits(form.cliente_telefone)
         : null;
+      let finalClienteNome: string = cliente_nome_input;
 
       try {
         const ensured = await ensureClientId({
           tenantId: ctx.tenantId,
           userId: ctx.userId,
-          cliente_nome,
-          cliente_telefone: form.cliente_telefone || "",
+          cliente_nome: cliente_nome_input,
+          cliente_telefone: form.cliente_telefone || telefoneFromQ,
           currentClientId: form.client_id || "",
         });
 
         finalClientId = ensured.clientId || null;
         finalTelefoneNorm = ensured.telefoneNorm || null;
+
+        if (ensured.existed) {
+          const existingNome = ensured.clientNome || "Sem nome";
+          const useExisting = confirm(
+            `Telefone já cadastrado para o cliente "${existingNome}".\n\nDeseja usar esse cliente?\n\nOK = usar este cliente\nCancelar = inserir um telefone diferente.`
+          );
+
+          if (!useExisting) {
+            alert(
+              "Informe um telefone diferente (ou selecione o cliente existente) para continuar."
+            );
+            return;
+          }
+
+          finalClienteNome = existingNome;
+          setClientQ(existingNome);
+          setShowClientDropdown(false);
+
+          setForm((s) => ({
+            ...s,
+            client_id: finalClientId || "",
+            cliente_nome: existingNome,
+            cliente_telefone: finalTelefoneNorm
+              ? maskPhone(finalTelefoneNorm)
+              : s.cliente_telefone,
+          }));
+        } else {
+          // Cliente novo (criado agora): usa nome digitado, ou "Sem nome".
+          finalClienteNome = finalClienteNome || ensured.clientNome || "Sem nome";
+        }
 
         if (finalClientId && finalClientId !== form.client_id) {
           setForm((s) => ({
@@ -1001,15 +1259,62 @@ export default function PedidosPanel() {
         return;
       }
 
+      if (!finalClienteNome) {
+        return alert("Selecione ou digite o cliente.");
+      }
+
+      // ✅ produto (catálogo): tenta localizar por nome, senão cria
+      const produtoNome = String(form.produto || "").trim();
+      let productId: string | null = (form.product_id || "").trim() || null;
+
+      if (produtoNome) {
+        const matched = findProductByName(produtoNome);
+        if (matched?.id) {
+          productId = matched.id;
+        } else {
+          const insertProd = {
+            tenant_id: ctx.tenantId,
+            client_id: finalClientId,
+            nome: produtoNome,
+            created_by: ctx.userId,
+            updated_by: ctx.userId,
+          };
+
+          const { data: createdProd, error: prodErr } = await supabase
+            .from("products")
+            .insert([insertProd])
+            .select("id, nome, client_id")
+            .maybeSingle();
+
+          if (prodErr) {
+            console.log("[PEDIDOS] create product error:", prodErr);
+          } else if (createdProd?.id) {
+            productId = String(createdProd.id);
+            setProducts((prev) => [createdProd as any, ...prev]);
+          }
+        }
+      } else {
+        productId = null;
+      }
+
+      // mantém form em sync quando o usuário escolhe pelo datalist
+      setForm((s) => ({
+        ...s,
+        product_id: productId || "",
+      }));
+
       const payload = {
         tenant_id: ctx.tenantId,
         dt_entrada,
         dt_saida: form.dt_saida ? form.dt_saida : null,
         client_id: finalClientId,
-        cliente_nome,
+        cliente_nome: finalClienteNome,
         cliente_telefone: finalTelefoneNorm,
         item: form.item ? form.item.trim() : null,
+        produto: produtoNome ? produtoNome : null,
+        product_id: productId,
         descricao: form.descricao ? form.descricao.trim() : null,
+        observacao: form.observacao ? form.observacao.trim() : null,
 
         // ✅ salva bruto + desconto + final
         valor_bruto: valorBruto,
@@ -1054,10 +1359,11 @@ export default function PedidosPanel() {
 
       const savedStatus = form.status as any;
       resetForm();
+      setFormOpen(false);
       setStatusTab(savedStatus);
 
-      await loadOrders(savedStatus);
-      await loadStatusCounts();
+      await loadOrders(savedStatus, orderSearchDebounced);
+      await loadStatusCounts(orderSearchDebounced);
     } finally {
       setSaving(false);
     }
@@ -1104,11 +1410,9 @@ export default function PedidosPanel() {
       <div className="border rounded p-4">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div>
-            <div className="font-bold text-lg">
-              {isEdit ? "Editar Pedido" : "Novo Pedido"}
-            </div>
+            <div className="font-bold text-lg">Pedidos</div>
             <div className="text-sm text-gray-600">
-              Status atual: {form.status}
+              {formOpen ? (isEdit ? "Editando pedido" : "Cadastrando novo pedido") : "Cadastro fechado"}
             </div>
             {tenantError && (
               <div className="text-xs text-red-600 mt-1">
@@ -1118,27 +1422,28 @@ export default function PedidosPanel() {
           </div>
 
           <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
-            {isEdit && (
+            {!formOpen ? (
               <button
-                className="border px-3 py-2 rounded w-full sm:w-auto"
-                onClick={resetForm}
+                className="bg-black text-white px-3 py-2 rounded w-full sm:w-auto"
+                onClick={openNewOrder}
                 disabled={saving}
               >
-                Cancelar edição
+                Novo Pedido
+              </button>
+            ) : (
+              <button
+                className="border px-3 py-2 rounded w-full sm:w-auto"
+                onClick={() => setFormOpen(false)}
+                disabled={saving}
+              >
+                Fechar
               </button>
             )}
-
-            <button
-              className="bg-black text-white px-3 py-2 rounded w-full sm:w-auto"
-              onClick={save}
-              disabled={saving}
-            >
-              {saving ? "Salvando..." : isEdit ? "Atualizar" : "Salvar"}
-            </button>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-4">
+        {formOpen && (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-4">
           <Field
             label="Data de entrada *"
             type="date"
@@ -1223,15 +1528,55 @@ export default function PedidosPanel() {
             label="Item"
             value={form.item}
             onChange={(v) => setForm((s) => ({ ...s, item: v }))}
-            placeholder="Ex: Produto / Serviço"
+            placeholder="Ex: Serviço"
           />
 
-          <Field
-            label="Valor (subtotal) *"
-            value={form.valor}
-            onChange={(v) => setForm((s) => ({ ...s, valor: maskBRL(v) }))}
-            placeholder="0,00"
-          />
+          <label className="block min-w-0">
+            <div className="text-sm font-medium mb-1">
+              Produto {productsLoading ? "(carregando...)" : ""}
+            </div>
+
+            <input
+              list="product-options"
+              className="border rounded px-3 py-2 w-full max-w-full min-w-0"
+              value={form.produto}
+              onChange={(e) => {
+                const v = e.target.value;
+
+                setForm((s) => {
+                  const key = String(v || "")
+                    .trim()
+                    .replace(/\s+/g, " ")
+                    .toLowerCase();
+
+                  const matched = products.find(
+                    (p) =>
+                      String(p.nome || "")
+                        .trim()
+                        .replace(/\s+/g, " ")
+                        .toLowerCase() === key
+                  );
+
+                  return {
+                    ...s,
+                    produto: v,
+                    product_id: matched?.id ? String(matched.id) : "",
+                  };
+                });
+              }}
+              placeholder="Ex: Maquina"
+            />
+
+            <datalist id="product-options">
+              {products.map((p) => (
+                <option key={p.id} value={p.nome} />
+              ))}
+            </datalist>
+
+            <div className="text-xs text-slate-500 mt-1">
+              Ao digitar um produto novo e salvar, ele entra no catálogo.
+            </div>
+          </label>
 
           {/* ✅ DESCONTO */}
           <label className="block">
@@ -1254,45 +1599,54 @@ export default function PedidosPanel() {
             </select>
           </label>
 
-          <label className="block">
-            <div className="text-sm font-medium mb-1">
-              {form.desconto_tipo === "percent"
-                ? "Valor do desconto (%)"
-                : form.desconto_tipo === "amount"
-                ? "Valor do desconto (R$)"
-                : "Valor do desconto"}
-            </div>
-
-            <input
-              className="border rounded px-3 py-2 w-full disabled:opacity-60"
-              disabled={form.desconto_tipo === "none"}
-              value={form.desconto_valor}
-              onChange={(e) => {
-                const v = e.target.value;
-
-                if (form.desconto_tipo === "percent") {
-                  const cleaned = v
-                    .replace(/[^\d,]/g, "")
-                    .replace(/(,.*),/g, "$1");
-                  setForm((s) => ({ ...s, desconto_valor: cleaned }));
-                } else if (form.desconto_tipo === "amount") {
-                  setForm((s) => ({
-                    ...s,
-                    desconto_valor: maskBRL(v),
-                  }));
-                } else {
-                  setForm((s) => ({ ...s, desconto_valor: "" }));
-                }
-              }}
-              placeholder={
-                form.desconto_tipo === "percent"
-                  ? "Ex: 10"
+          <div className="space-y-3">
+            <label className="block">
+              <div className="text-sm font-medium mb-1">
+                {form.desconto_tipo === "percent"
+                  ? "Valor do desconto (%)"
                   : form.desconto_tipo === "amount"
-                  ? "Ex: 50,00"
-                  : ""
-              }
+                  ? "Valor do desconto (R$)"
+                  : "Valor do desconto"}
+              </div>
+
+              <input
+                className="border rounded px-3 py-2 w-full disabled:opacity-60"
+                disabled={form.desconto_tipo === "none"}
+                value={form.desconto_valor}
+                onChange={(e) => {
+                  const v = e.target.value;
+
+                  if (form.desconto_tipo === "percent") {
+                    const cleaned = v
+                      .replace(/[^\d,]/g, "")
+                      .replace(/(,.*),/g, "$1");
+                    setForm((s) => ({ ...s, desconto_valor: cleaned }));
+                  } else if (form.desconto_tipo === "amount") {
+                    setForm((s) => ({
+                      ...s,
+                      desconto_valor: maskBRL(v),
+                    }));
+                  } else {
+                    setForm((s) => ({ ...s, desconto_valor: "" }));
+                  }
+                }}
+                placeholder={
+                  form.desconto_tipo === "percent"
+                    ? "Ex: 10"
+                    : form.desconto_tipo === "amount"
+                    ? "Ex: 50,00"
+                    : ""
+                }
+              />
+            </label>
+
+            <Field
+              label="Valor (subtotal) *"
+              value={form.valor}
+              onChange={(v) => setForm((s) => ({ ...s, valor: maskBRL(v) }))}
+              placeholder="0,00"
             />
-          </label>
+          </div>
 
           {/* ✅ RESUMO */}
           <div className="md:col-span-3">
@@ -1335,7 +1689,7 @@ export default function PedidosPanel() {
               Descrição (soma automática por linha)
             </div>
             <textarea
-              className="border rounded px-3 py-2 w-full min-h-[110px]"
+              className="border rounded px-3 py-2 w-full min-h-55"
               value={form.descricao}
               onChange={(e) => {
                 const desc = e.target.value;
@@ -1356,11 +1710,85 @@ export default function PedidosPanel() {
     3 MAO DE OBRA - 1500`}
             />
           </label>
-        </div>
+
+          <label className="block md:col-span-3">
+            <div className="text-sm font-medium mb-1">Observação</div>
+            <textarea
+              className="border rounded px-3 py-2 w-full min-h-28"
+              value={form.observacao}
+              onChange={(e) =>
+                setForm((s) => ({
+                  ...s,
+                  observacao: e.target.value,
+                }))
+              }
+              placeholder="Ex: Garantia de 90 dias. Retirar até sexta. Peça encomendada."
+            />
+          </label>
+          </div>
+        )}
+
+        {formOpen && (
+          <div className="mt-3 flex flex-col sm:flex-row gap-2 justify-start">
+            <button
+              className="bg-black text-white px-3 py-2 rounded w-full sm:w-auto"
+              onClick={save}
+              disabled={saving}
+            >
+              {saving ? "Salvando..." : isEdit ? "Atualizar" : "Salvar"}
+            </button>
+
+            {isEdit && (
+              <button
+                className="border px-3 py-2 rounded w-full sm:w-auto"
+                onClick={() => {
+                  resetForm();
+                  setFormOpen(false);
+                }}
+                disabled={saving}
+              >
+                Cancelar edição
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
-
       <div className="border rounded p-4">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-3">
+          <div>
+            <div className="font-bold text-lg">Lista de Pedidos</div>
+            {orderSearchDebounced ? (
+              <div className="text-xs text-slate-600">
+                Filtrando por: <b>{orderSearchDebounced}</b>
+              </div>
+            ) : (
+              <div className="text-xs text-slate-600">Selecione um status e gerencie seus pedidos.</div>
+            )}
+          </div>
+
+          <div className="w-full sm:w-80">
+            <div className="flex gap-2">
+              <input
+                value={orderSearch}
+                onChange={(e) => setOrderSearch(e.target.value)}
+                placeholder="Pesquisar pedidos (cliente, produto, item, telefone, descrição, observação...)"
+                className="border rounded px-3 py-2 w-full"
+              />
+              {orderSearch && (
+                <button
+                  type="button"
+                  onClick={() => setOrderSearch("")}
+                  className="border px-3 py-2 rounded hover:bg-gray-50"
+                  title="Limpar"
+                >
+                  <X size={16} />
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+
         <div className="flex flex-wrap gap-2 items-center">
           {statusCountsLoading && (
             <div className="text-xs text-gray-500 mr-2">
@@ -1396,7 +1824,7 @@ export default function PedidosPanel() {
                 <tr className="bg-gray-50 text-left">
                   <th className="border px-3 py-2">Entrada</th>
                   <th className="border px-3 py-2">Cliente</th>
-                  <th className="border px-3 py-2">Item</th>
+                  <th className="border px-3 py-2">Produto</th>
                   <th className="border px-3 py-2">Total</th>
                   <th className="border px-3 py-2">Status</th>
                   <th className="border px-3 py-2">Ações</th>
@@ -1407,7 +1835,9 @@ export default function PedidosPanel() {
                 {orders.length === 0 ? (
                   <tr>
                     <td colSpan={6} className="border px-3 py-3 text-gray-600">
-                      Nenhum pedido neste status.
+                      {orderSearchDebounced
+                        ? "Nenhum pedido encontrado para sua pesquisa."
+                        : "Nenhum pedido neste status."}
                     </td>
                   </tr>
                 ) : (
@@ -1424,7 +1854,12 @@ export default function PedidosPanel() {
                         </div>
                       </td>
 
-                      <td className="border px-3 py-2">{o.item || ""}</td>
+                      <td className="border px-3 py-2">
+                        <div className="font-medium">{o.produto || o.item || ""}</div>
+                        {o.produto && o.item ? (
+                          <div className="text-xs text-slate-600">{o.item}</div>
+                        ) : null}
+                      </td>
 
                       <td className="border px-3 py-2">
                         {formatBRLFromNumber(Number(o.valor) || 0)}
@@ -1592,6 +2027,22 @@ function PreviewModal(props: {
     });
   }
 
+  async function tryLoadLogoDataUrl(logoUrl: string): Promise<string | null> {
+    try {
+      return await toDataURLFromImageUrl(logoUrl);
+    } catch (e) {
+      console.log("[PEDIDOS] direct logo fetch failed, trying proxy...", e);
+    }
+
+    try {
+      const proxied = `/api/image-proxy?url=${encodeURIComponent(logoUrl)}`;
+      return await toDataURLFromImageUrl(proxied);
+    } catch (e) {
+      console.log("[PEDIDOS] proxy logo fetch failed:", e);
+      return null;
+    }
+  }
+
   useEffect(() => {
     let alive = true;
 
@@ -1602,8 +2053,8 @@ function PreviewModal(props: {
       if (!url) return;
 
       try {
-        const dataUrl = await toDataURLFromImageUrl(url);
-        if (alive) setLogoDataUrl(dataUrl);
+        const dataUrl = await tryLoadLogoDataUrl(url);
+        if (alive && dataUrl) setLogoDataUrl(dataUrl);
       } catch (e) {
         console.log("[PEDIDOS] logo to dataurl failed:", e);
       }
@@ -1651,6 +2102,39 @@ function PreviewModal(props: {
     if (!previewRef.current) return null;
 
     const node = previewRef.current;
+
+    // ✅ Garante que a logo esteja embutida em DataURL antes do snapshot.
+    // Isso evita sumir no PNG/WhatsApp no mobile (CORS/canvas taint/timing).
+    const logoUrl = props.tenant?.logo_url;
+    const logoImg = node.querySelector(
+      'img[data-role="tenant-logo"]'
+    ) as HTMLImageElement | null;
+
+    let revertLogoSrc: string | null = null;
+    try {
+      if (logoUrl && logoImg) {
+        const currentSrc = logoImg.getAttribute("src") || "";
+        const isDataUrl = currentSrc.startsWith("data:");
+
+        if (!isDataUrl) {
+          const dataUrl = logoDataUrl || (await tryLoadLogoDataUrl(logoUrl));
+          if (dataUrl) {
+            revertLogoSrc = currentSrc;
+            logoImg.src = dataUrl;
+            // mantém o estado em sync pro preview ficar consistente
+            setLogoDataUrl((prev) => prev || dataUrl);
+
+            if (!(logoImg.complete && logoImg.naturalWidth > 0)) {
+              await new Promise<void>((resolve) => {
+                const done = () => resolve();
+                logoImg.addEventListener("load", done, { once: true });
+                logoImg.addEventListener("error", done, { once: true });
+              });
+            }
+          }
+        }
+      }
+
     const imgs = Array.from(node.querySelectorAll("img")) as HTMLImageElement[];
 
     // ✅ aguarda todas as imagens carregarem (ou falharem) antes de gerar o canvas
@@ -1724,6 +2208,11 @@ function PreviewModal(props: {
     }
 
     return { pages };
+    } finally {
+      if (logoImg && revertLogoSrc) {
+        logoImg.src = revertLogoSrc;
+      }
+    }
   };
 
   const stageRef = useRef<HTMLDivElement | null>(null);
@@ -1815,7 +2304,7 @@ function PreviewModal(props: {
 
   return (
     <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center">
-      <div className="bg-white rounded-lg w-[1024px] shadow-lg overflow-hidden">
+      <div className="bg-white rounded-lg w-5xl shadow-lg overflow-hidden">
         <div className="flex items-center justify-between px-5 py-4 border-b">
           <div className="font-bold text-lg">Pré-visualização</div>
           <button
@@ -1840,128 +2329,172 @@ function PreviewModal(props: {
                 {/* ✅ ESTE é o container que será impresso/baixado */}
                 <div
                   ref={previewRef}
-                  className="border-2 border-black rounded-lg bg-white"
+                  className="rounded-lg bg-white text-slate-900 border border-slate-300"
                   style={{
                     width: PAPER_W,
                     minHeight: A4_H,
-                    padding: 24,
+                    padding: 32,
                     boxSizing: "border-box",
                   }}
                 >
 
-                  <div className="text-sm">
+                  <div className="text-[13px] leading-[1.35]">
                     {props.tenantLoading ? (
                       <div className="text-gray-600">
                         Carregando dados da empresa...
                       </div>
                     ) : (
                       <>
-                        <div className="grid grid-cols-[1fr_240px] gap-4 items-start">
+                        <div className="flex items-start justify-between gap-6">
                           <div className="min-w-0">
-                            <div className="font-bold text-base">
+                            <div className="text-[20px] font-extrabold tracking-tight leading-tight">
                               {props.tenant?.name || ""}
                             </div>
 
-                            <div className="flex gap-4 mt-1">
-                              <div>
-                                <b>CNPJ:</b> {props.tenant?.cnpj || ""}
+                            <div className="mt-2 text-slate-700 space-y-1">
+                              <div className="flex flex-wrap gap-x-6 gap-y-1">
+                                <div>
+                                  <span className="font-semibold">CNPJ:</span> {props.tenant?.cnpj || ""}
+                                </div>
+                                <div>
+                                  <span className="font-semibold">IE:</span> {props.tenant?.ie || ""}
+                                </div>
                               </div>
-                              <div>
-                                <b>IE:</b> {props.tenant?.ie || ""}
+
+                              <div className="truncate">
+                                <span className="font-semibold">Endereço:</span> {props.tenant?.endereco || ""}
                               </div>
-                            </div>
 
-                            <div className="mt-1">
-                              <b>Endereço:</b> {props.tenant?.endereco || ""}
-                            </div>
-
-                            <div className="mt-1">
-                              <b>Fone:</b>{" "}
-                              {props.tenant?.phone ? maskPhone(props.tenant.phone) : ""}
+                              <div>
+                                <span className="font-semibold">Fone:</span>{" "}
+                                {props.tenant?.phone ? maskPhone(props.tenant.phone) : ""}
+                              </div>
                             </div>
                           </div>
 
-                          <div className="flex justify-end">
+                          <div className="shrink-0 flex flex-col items-end gap-3">
                             {props.tenant?.logo_url ? (
                               <img
                                 src={logoDataUrl || props.tenant.logo_url}
                                 alt="Logo da empresa"
-                                className="max-h-[200px] max-w-[300px] object-contain"
+                                className="h-18 w-45 object-contain"
                                 crossOrigin="anonymous"
+                                data-role="tenant-logo"
                               />
                             ) : null}
+
+                            <div className="text-right">
+                              <div className="text-[11px] uppercase tracking-wide text-slate-500">
+                                Pedido
+                              </div>
+                              <div className="text-[15px] font-bold leading-tight">
+                                {props.order.dt_entrada || ""}
+                              </div>
+                              <div className="mt-1 inline-flex items-center rounded-full border border-slate-300 px-2 py-0.5 text-[12px] font-semibold text-slate-700">
+                                {props.order.status || ""}
+                              </div>
+                            </div>
                           </div>
                         </div>
                       </>
                     )}
                   </div>
 
-                  <div className="border-t-2 border-black my-4" />
+                  <div className="my-5 border-t border-slate-200" />
 
-                  <div className="text-sm space-y-1">
-                    <div className="flex gap-6">
-                      <div>
-                        <b>Data:</b> {props.order.dt_entrada}
-                      </div>
-                      <div>
-                        <b>Status:</b> {props.order.status}
-                      </div>
+                  <div className="text-center">
+                    <div className="text-[12px] uppercase tracking-wide text-slate-500">
+                      Produto / Serviço
                     </div>
 
-                    <div className="flex gap-6">
-                      <div>
-                        <b>Cliente:</b> {props.order.cliente_nome}
+                    <div className="mt-1 font-extrabold text-[18px] leading-tight">
+                      {props.order.produto || props.order.item || ""}
+                    </div>
+
+                    {props.order.produto && props.order.item ? (
+                      <div className="mt-1 text-[13px] text-slate-700">
+                        {props.order.item}
                       </div>
-                      <div>
-                        <b>Fone:</b>{" "}
+                    ) : null}
+                  </div>
+
+                  <div className="my-5 border-t border-slate-200" />
+
+                  <div className="grid grid-cols-2 gap-4 text-[13px] leading-[1.35]">
+                    <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                      <div className="text-[11px] uppercase tracking-wide text-slate-500">
+                        Cliente
+                      </div>
+                      <div className="mt-1 font-bold text-[14px]">
+                        {props.order.cliente_nome || ""}
+                      </div>
+                      <div className="mt-1 text-slate-700">
+                        <span className="font-semibold">Fone:</span>{" "}
                         {props.order.cliente_telefone
                           ? maskPhone(props.order.cliente_telefone)
                           : ""}
                       </div>
                     </div>
+
+                    <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                      <div className="text-[11px] uppercase tracking-wide text-slate-500">
+                        Informações
+                      </div>
+                      <div className="mt-1 text-slate-700">
+                        <span className="font-semibold">Data:</span> {props.order.dt_entrada || ""}
+                      </div>
+                      <div className="mt-1 text-slate-700">
+                        <span className="font-semibold">Status:</span> {props.order.status || ""}
+                      </div>
+                    </div>
                   </div>
-        
 
-                  <div className="border-t-2 border-black my-4" />
+                  {props.order.observacao ? (
+                    <>
+                      <div className="my-5 border-t border-slate-200" />
+                      <div className="rounded-md border-2 border-dashed border-slate-400 bg-white p-3 text-[13px] leading-[1.35]">
+                        <div className="text-[11px] uppercase tracking-wide text-slate-500">
+                          Observação
+                        </div>
+                        <div className="mt-1 text-slate-800 whitespace-pre-wrap">
+                          {props.order.observacao}
+                        </div>
+                      </div>
+                    </>
+                  ) : null}
 
-                  <div className="text-center font-bold text-lg">
-                    {props.order.item || ""}
-                  </div>
-
-                  <div className="border-t-2 border-black my-4" />
+                  <div className="my-5 border-t border-slate-200" />
 
                   <div className="overflow-auto">
-                    <table className="min-w-full border-2 border-black">
+                    <table className="min-w-full border border-slate-300 text-[13px]">
                       <thead>
-                        <tr className="bg-gray-50">
-                          <th className="border-2 border-black px-3 py-2 w-[80px] text-left">
+                        <tr className="bg-slate-50">
+                          <th className="border-b border-slate-300 px-3 py-2 w-20 text-left font-semibold text-slate-700">
                             Item
                           </th>
-                          <th className="border-2 border-black px-3 py-2 text-left">
+                          <th className="border-b border-slate-300 px-3 py-2 text-left font-semibold text-slate-700">
                             Descrição
                           </th>
-                          <th className="border-2 border-black px-3 py-2 w-[160px] text-right">
+                          <th className="border-b border-slate-300 px-3 py-2 w-40 text-right font-semibold text-slate-700">
                             Valor
                           </th>
                         </tr>
                       </thead>
-                      <tbody>
+                      <tbody className="divide-y divide-slate-200">
                         {itens.length === 0 ? (
                           <tr>
-                            <td className="border-2 border-black px-3 py-2">1</td>
-                            <td className="border-2 border-black px-3 py-2">—</td>
-                            <td className="border-2 border-black px-3 py-2 text-right">
+                            <td className="px-3 py-2">1</td>
+                            <td className="px-3 py-2 text-slate-600">—</td>
+                            <td className="px-3 py-2 text-right">
                               {formatBRLFromNumber(subtotal)}
                             </td>
                           </tr>
                         ) : (
                           itens.map((it) => (
                             <tr key={it.n}>
-                              <td className="border-2 border-black px-3 py-2">{it.n}</td>
-                              <td className="border-2 border-black px-3 py-2">
-                                {it.desc}
-                              </td>
-                              <td className="border-2 border-black px-3 py-2 text-right">
+                              <td className="px-3 py-2">{it.n}</td>
+                              <td className="px-3 py-2 wrap-break-word">{it.desc}</td>
+                              <td className="px-3 py-2 text-right">
                                 {formatBRLFromNumber(it.value)}
                               </td>
                             </tr>
@@ -1972,22 +2505,37 @@ function PreviewModal(props: {
                   </div>
 
                   {/* ✅ TOTAIS */}
-                  <div className="mt-4 text-sm flex flex-col items-end gap-1">
-                    <div>
-                      <b>SUBTOTAL:</b> {formatBRLFromNumber(subtotal)}
-                    </div>
+                  <div className="mt-5 flex items-end justify-end">
+                    <div className="w-[320px] rounded-md border border-slate-200 bg-slate-50 p-3 text-[13px]">
+                      {discount > 0 ? (
+                        <>
+                          <div className="flex items-center justify-between text-slate-700">
+                            <div className="font-semibold">
+                              Desconto{discountType === "percent" ? ` (${props.order.desconto_valor ?? 0}%)` : ""}
+                            </div>
+                            <div className="font-semibold">-{formatBRLFromNumber(discount)}</div>
+                          </div>
 
-                    {discount > 0 ? (
-                      <div>
-                        <b>DESCONTO:</b> -{formatBRLFromNumber(discount)}
-                        {discountType === "percent"
-                          ? ` (${props.order.desconto_valor ?? 0}%)`
-                          : ""}
+                          <div className="mt-1 flex items-center justify-between">
+                            <div className="font-semibold text-slate-700">Subtotal</div>
+                            <div className="font-semibold">{formatBRLFromNumber(subtotal)}</div>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="flex items-center justify-between">
+                          <div className="font-semibold text-slate-700">Subtotal</div>
+                          <div className="font-semibold">{formatBRLFromNumber(subtotal)}</div>
+                        </div>
+                      )}
+
+                      <div className="mt-3 pt-2 border-t border-slate-200 flex items-center justify-between">
+                        <div className="text-[12px] uppercase tracking-wide text-slate-500">
+                          Total
+                        </div>
+                        <div className="text-[20px] font-extrabold">
+                          {formatBRLFromNumber(totalFinal)}
+                        </div>
                       </div>
-                    ) : null}
-
-                    <div className="font-extrabold text-xl">
-                      TOTAL: {formatBRLFromNumber(totalFinal)}
                     </div>
                   </div>
                 </div>
