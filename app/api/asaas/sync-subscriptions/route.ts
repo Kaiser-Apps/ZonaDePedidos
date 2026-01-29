@@ -3,9 +3,20 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
 const ASAAS_API_KEY = process.env.ASAAS_API_KEY || "";
-const ASAAS_BASE_URL = (process.env.ASAAS_BASE_URL || "https://api.asaas.com").replace(/\/$/, "");
+const ASAAS_BASE_URL_RAW = (process.env.ASAAS_BASE_URL || "").trim();
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+
+function resolveAsaasBaseV3() {
+  const raw = (ASAAS_BASE_URL_RAW || "").replace(/\/+$/, "");
+  if (raw) {
+    // aceita tanto "https://api.asaas.com" quanto "https://api.asaas.com/v3"
+    return raw.endsWith("/v3") ? raw : `${raw}/v3`;
+  }
+
+  const env = String(process.env.ASAAS_ENV || "sandbox").toLowerCase().trim();
+  return env === "production" ? "https://api.asaas.com/v3" : "https://api-sandbox.asaas.com/v3";
+}
 
 function upper(v: any) {
   return String(v || "").trim().toUpperCase();
@@ -57,6 +68,8 @@ export async function POST(req: Request) {
     auth: { persistSession: false },
   });
 
+  const ASAAS_BASE_V3 = resolveAsaasBaseV3();
+
   // 🔒 Proteção opcional: se ASAAS_SYNC_TOKEN estiver setado, exige token no header
   const expectedToken = (process.env.ASAAS_SYNC_TOKEN || "").trim();
   if (expectedToken) {
@@ -75,6 +88,10 @@ export async function POST(req: Request) {
   const cleanupMinutes =
     parseMinutes(urlObj.searchParams.get("cleanup_unpaid_minutes")) ||
     parseMinutes(urlObj.searchParams.get("cleanup"));
+
+  const debug = urlObj.searchParams.get("debug") === "1";
+  const debugLimit = parseMinutes(urlObj.searchParams.get("debug_limit")) || 25;
+  const debugRows: any[] = [];
 
   // Buscar todos tenants para possível associação
   const { data: tenants, error: tenantsErr } = await supabase
@@ -98,7 +115,7 @@ export async function POST(req: Request) {
 
   while (hasMore) {
     try {
-      const url = `${ASAAS_BASE_URL}/v3/subscriptions?limit=${limit}&offset=${page * limit}`;
+      const url = `${ASAAS_BASE_V3}/subscriptions?limit=${limit}&offset=${page * limit}`;
       const subsRes = await fetch(url, {
         headers: { "access_token": ASAAS_API_KEY },
       });
@@ -114,7 +131,7 @@ export async function POST(req: Request) {
         // Se não houver tenant local, busca o e-mail do cliente no Asaas
         if (!email) {
           try {
-            const custRes = await fetch(`${ASAAS_BASE_URL}/v3/customers/${sub.customer}`, {
+            const custRes = await fetch(`${ASAAS_BASE_V3}/customers/${sub.customer}`, {
               headers: { "access_token": ASAAS_API_KEY },
             });
             if (custRes.ok) {
@@ -131,7 +148,7 @@ export async function POST(req: Request) {
         const paymentLinkId = sub.paymentLink || sub.paymentLinkId || null;
         if (paymentLinkId) {
           try {
-            const linkRes = await fetch(`${ASAAS_BASE_URL}/v3/paymentLinks/${paymentLinkId}`, {
+            const linkRes = await fetch(`${ASAAS_BASE_V3}/paymentLinks/${paymentLinkId}`, {
               headers: { "access_token": ASAAS_API_KEY },
             });
             if (linkRes.ok) {
@@ -150,7 +167,7 @@ export async function POST(req: Request) {
         let last_invoice_url: string | null = null;
         let hasPaidPayment = false;
         try {
-          const payRes = await fetch(`${ASAAS_BASE_URL}/v3/payments?subscription=${sub.id}&limit=5&offset=0&sort=paymentDate&order=desc`, {
+          const payRes = await fetch(`${ASAAS_BASE_V3}/payments?subscription=${sub.id}&limit=5&offset=0&sort=paymentDate&order=desc`, {
             headers: { "access_token": ASAAS_API_KEY },
           });
           if (payRes.ok) {
@@ -172,16 +189,33 @@ export async function POST(req: Request) {
         const billing_status = normalizeBillingStatus(sub.status, hasPaidPayment);
         const current_period_end = dateOnlyToIso(sub.nextDueDate || null);
 
+        const createdAt = sub.createdAt || sub.dateCreated || sub.created_at || null;
         const shouldCleanup =
           cleanupMinutes > 0 &&
           !hasPaidPayment &&
           billing_status === "PENDING" &&
-          isOlderThanMinutes(sub.createdAt || sub.created_at || null, cleanupMinutes);
+          isOlderThanMinutes(createdAt, cleanupMinutes);
+
+        if (debug && debugRows.length < debugLimit) {
+          const createdAtStr = createdAt ? String(createdAt) : null;
+          const createdAtMs = createdAtStr ? new Date(createdAtStr).getTime() : NaN;
+          const ageMinutes = Number.isFinite(createdAtMs) ? Math.floor((Date.now() - createdAtMs) / 60000) : null;
+          debugRows.push({
+            id: sub.id,
+            status: sub.status,
+            billing_status,
+            hasPaidPayment,
+            createdAt: createdAtStr,
+            ageMinutes,
+            cleanupMinutes,
+            shouldCleanup,
+          });
+        }
 
         if (shouldCleanup) {
           // 1) tenta cancelar no Asaas (best-effort)
           try {
-            const delRes = await fetch(`${ASAAS_BASE_URL}/v3/subscriptions/${encodeURIComponent(String(sub.id))}`, {
+            const delRes = await fetch(`${ASAAS_BASE_V3}/subscriptions/${encodeURIComponent(String(sub.id))}`, {
               method: "DELETE",
               headers: { "access_token": ASAAS_API_KEY },
             });
@@ -288,5 +322,15 @@ export async function POST(req: Request) {
     }
   }
 
-  return NextResponse.json({ ok: true, total, updated, cleaned, canceled, cleanupMinutes, errors });
+  return NextResponse.json({
+    ok: true,
+    total,
+    updated,
+    cleaned,
+    canceled,
+    cleanupMinutes,
+    asaasBase: ASAAS_BASE_V3,
+    debug: debug ? debugRows : undefined,
+    errors,
+  });
 }
