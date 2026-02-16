@@ -210,7 +210,12 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         const t = json?.tenantBilling ?? null;
         setTenantBilling(t);
 
-        if (!pathname?.startsWith("/assinatura")) {
+        // Permite acessar /assinatura (checkout) e /configuracoes (editar dados)
+        // mesmo com assinatura inativa. O restante do app continua bloqueado.
+        if (
+          !pathname?.startsWith("/assinatura") &&
+          !pathname?.startsWith("/configuracoes")
+        ) {
           const allowed = isAccessAllowed(t);
           if (!allowed) {
             router.replace("/assinatura");

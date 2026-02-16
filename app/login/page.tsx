@@ -135,40 +135,40 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-[#F3F7F4] flex items-center justify-center p-4">
-      <div className="w-full max-w-md bg-white border rounded-2xl shadow-sm p-6">
+    <div className="min-h-screen bg-[#F3F7F4] dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex items-center justify-center p-4">
+      <div className="w-full max-w-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm p-6">
         <div className="flex items-center gap-3">
-          <div className="h-10 w-10 rounded-2xl bg-gradient-to-br from-emerald-600 to-green-500 flex items-center justify-center shadow-sm">
+          <div className="h-10 w-10 rounded-2xl bg-linear-to-br from-emerald-600 to-green-500 flex items-center justify-center shadow-sm">
             <span className="text-white font-extrabold">Z</span>
           </div>
           <div>
             <div className="text-lg font-extrabold">Zona de Pedidos</div>
-            <div className="text-xs text-slate-500">Acesse sua conta</div>
+            <div className="text-xs text-slate-500 dark:text-slate-400">Acesse sua conta</div>
           </div>
         </div>
 
         <div className="mt-6 space-y-3">
           <div>
-            <div className="text-xs text-slate-600 mb-1">E-mail</div>
+            <div className="text-xs text-slate-600 dark:text-slate-300 mb-1">E-mail</div>
             <input
               value={email}
               onChange={(e) => setEmailAndCache(e.target.value)}
               onBlur={(e) => setEmailAndCache(e.target.value)}
               placeholder="seuemail@exemplo.com"
-              className="w-full border rounded-xl px-3 py-2 text-sm"
+              className="w-full border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 rounded-xl px-3 py-2 text-sm"
               autoComplete="email"
               inputMode="email"
             />
           </div>
 
           <div>
-            <div className="text-xs text-slate-600 mb-1">Senha</div>
+            <div className="text-xs text-slate-600 dark:text-slate-300 mb-1">Senha</div>
             <input
               value={senha}
               onChange={(e) => setSenha(e.target.value)}
               placeholder="••••••••"
               type="password"
-              className="w-full border rounded-xl px-3 py-2 text-sm"
+              className="w-full border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 rounded-xl px-3 py-2 text-sm"
               autoComplete="current-password"
             />
           </div>
@@ -186,7 +186,7 @@ export default function LoginPage() {
             <button
               onClick={onResendConfirmation}
               disabled={resendBusy || cooldown > 0}
-              className="w-full border px-5 py-2 rounded-xl text-sm font-semibold disabled:opacity-60"
+              className="w-full border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-5 py-2 rounded-xl text-sm font-semibold disabled:opacity-60"
             >
               {cooldown > 0
                 ? `Reenviar em ${cooldown}s`
@@ -196,7 +196,7 @@ export default function LoginPage() {
             </button>
           )}
 
-          <div className="text-xs text-slate-600 text-center">
+          <div className="text-xs text-slate-600 dark:text-slate-300 text-center">
             Ainda não tem conta?{" "}
             <Link href="/cadastro" className="font-bold underline">
               Criar conta

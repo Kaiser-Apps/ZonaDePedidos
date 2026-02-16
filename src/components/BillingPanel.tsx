@@ -75,6 +75,7 @@ export default function BillingPanel() {
 
   const [promo, setPromo] = useState("");
   const [promoBusy, setPromoBusy] = useState(false);
+  const [showPromoInput, setShowPromoInput] = useState(false);
 
   const [cpfCnpj, setCpfCnpj] = useState("");
   const [billingType, setBillingType] = useState<
@@ -594,29 +595,6 @@ export default function BillingPanel() {
         </div>
       ) : null}
 
-      {/* PROMOCODE */}
-      <div className="mt-6">
-        <div className="text-sm font-bold">Cupom</div>
-        <div className="mt-2 flex flex-wrap gap-2">
-          <input
-            value={promo}
-            onChange={(e) => setPromo(e.target.value)}
-            placeholder="Ex: PROMO7 ou CUPOMFAMILIA"
-            className="border rounded-xl px-3 py-2 text-sm w-full sm:w-56 min-h-11"
-          />
-          <button
-            onClick={applyPromo}
-            disabled={promoBusy}
-            className="border px-4 py-2 rounded-xl text-sm font-semibold bg-white hover:bg-slate-50 min-h-11 w-full sm:w-auto disabled:opacity-60"
-          >
-            {promoBusy ? "Aplicando..." : "Aplicar cupom"}
-          </button>
-        </div>
-        <div className="mt-2 text-xs text-slate-500">
-          O cupom pode ativar <b>TRIAL</b> ou <b>VITALÍCIO</b> (família).
-        </div>
-      </div>
-
       {/* CHECKOUT (somente quando NÃO existe assinatura ativa/trial) */}
       {canStartNewSubscription ? (
         <>
@@ -640,7 +618,7 @@ export default function BillingPanel() {
               </button>
             </div>
             <div className="mt-2 text-xs text-slate-500">
-              Usado para emissão da cobrança no Asaas. (Aceita CPF 11 dígitos ou CNPJ 14 dígitos)
+              Usado para emissão da cobrança. (Aceita CPF 11 dígitos ou CNPJ 14 dígitos)
             </div>
           </div>
 
@@ -717,6 +695,54 @@ export default function BillingPanel() {
                   : `${planYearlyName} (R$ ${planYearlyValue})`}
             </button>
           </div>
+
+          {/* PROMOCODE (por último, abaixo das opções de pagamento) */}
+          <div className="mt-6">
+            {!showPromoInput ? (
+              <button
+                type="button"
+                onClick={() => setShowPromoInput(true)}
+                className="border px-4 py-2 rounded-xl text-sm font-semibold bg-white hover:bg-slate-50 min-h-11"
+              >
+                Tenho um cupom
+              </button>
+            ) : (
+              <div>
+                <div className="text-sm font-bold">Cupom</div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <input
+                    value={promo}
+                    onChange={(e) => setPromo(e.target.value)}
+                    placeholder="Ex: PROMO7 ou CUPOMFAMILIA"
+                    className="border rounded-xl px-3 py-2 text-sm w-full sm:w-56 min-h-11"
+                  />
+                  <button
+                    type="button"
+                    onClick={applyPromo}
+                    disabled={promoBusy}
+                    className="border px-4 py-2 rounded-xl text-sm font-semibold bg-white hover:bg-slate-50 min-h-11 w-full sm:w-auto disabled:opacity-60"
+                  >
+                    {promoBusy ? "Aplicando..." : "Aplicar cupom"}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPromo("");
+                      setShowPromoInput(false);
+                    }}
+                    disabled={promoBusy}
+                    className="border px-4 py-2 rounded-xl text-sm font-semibold bg-white hover:bg-slate-50 min-h-11 w-full sm:w-auto disabled:opacity-60"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+                <div className="mt-2 text-xs text-slate-500">
+                  O cupom pode ativar <b>TRIAL</b> ou <b>VITALÍCIO</b> (família).
+                </div>
+              </div>
+            )}
+          </div>
         </>
       ) : !isLifetime ? (
         <div className="mt-6 p-4 rounded-xl border bg-white">
@@ -746,9 +772,11 @@ export default function BillingPanel() {
         </div>
       ) : null}
 
-      <div className="mt-4 text-xs text-slate-500">
-        Após o pagamento, o webhook do Asaas atualiza o status automaticamente.
-      </div>
+      {canStartNewSubscription ? (
+        <div className="mt-4 text-xs text-slate-500">
+          Após a confirmação do pagamento, seu acesso será liberado automaticamente.
+        </div>
+      ) : null}
     </div>
   );
 }
