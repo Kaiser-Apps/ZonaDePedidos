@@ -93,6 +93,15 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     return "pedidos";
   }, [pathname]);
 
+  // Algumas páginas já têm layout próprio (ex.: Home e Assinatura).
+  // Nelas, não envolvemos o conteúdo com o card/grade principal do AppShell.
+  const useBoxedMain = useMemo(() => {
+    if (!pathname) return true;
+    if (pathname === "/") return false;
+    if (pathname.startsWith("/assinatura")) return false;
+    return true;
+  }, [pathname]);
+
   useEffect(() => {
     setMobileOpen(false);
   }, [pathname]);
@@ -269,7 +278,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                 type="button"
                 onClick={() => {
                   if (!canGoToPedidos) return;
-                  router.push("/?novo=1");
+                  router.push("/?home=1");
                 }}
                 disabled={!canGoToPedidos}
                 className={[
@@ -427,9 +436,13 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       </header>
 
       <main className="mx-auto max-w-6xl px-4 py-6">
-        <div className="bg-white border rounded-2xl shadow-sm p-4 md:p-6">
-          {children}
-        </div>
+        {useBoxedMain ? (
+          <div className="bg-white border rounded-2xl shadow-sm p-4 md:p-6">
+            {children}
+          </div>
+        ) : (
+          <div className="min-w-0">{children}</div>
+        )}
 
         <footer className="mt-6 text-center text-xs text-slate-500">
           © {new Date().getFullYear()} Zona de Pedidos

@@ -1935,33 +1935,31 @@ export default function PedidosPanel() {
         </div>
 
         <div className="flex flex-wrap gap-2 items-center">
-          {statusCountsLoading && (
-            <div className="text-xs text-gray-500 mr-2">
-              Atualizando status...
-            </div>
+          {statusCountsLoading ? (
+            <div className="text-xs text-gray-500 mr-2">Atualizando status...</div>
+          ) : (
+            visibleStatuses.map((s) => {
+              const count = statusCounts[s] || 0;
+              const label = `${s} (${count})`;
+
+              return (
+                <button
+                  key={s}
+                  onClick={() => setStatusTab(s)}
+                  className={`px-3 py-2 rounded border ${
+                    statusTab === s ? "bg-black text-white" : ""
+                  }`}
+                  title={label}
+                >
+                  {label}
+                </button>
+              );
+            })
           )}
-
-          {visibleStatuses.map((s) => {
-            const count = statusCounts[s] || 0;
-            const label = `${s} (${count})`;
-
-            return (
-              <button
-                key={s}
-                onClick={() => setStatusTab(s)}
-                className={`px-3 py-2 rounded border ${
-                  statusTab === s ? "bg-black text-white" : ""
-                }`}
-                title={label}
-              >
-                {label}
-              </button>
-            );
-          })}
         </div>
 
         <div className="mt-4 overflow-auto">
-          {ordersLoading ? (
+          {ordersLoading || statusCountsLoading ? (
             <div className="text-gray-600">Carregando pedidos...</div>
           ) : (
             <table className="min-w-full border">
@@ -2158,6 +2156,20 @@ function PreviewModal(props: {
 
 
   const [logoDataUrl, setLogoDataUrl] = useState<string | null>(null);
+
+  const getLogoSrc = useCallback((logoUrl: string | null | undefined) => {
+    if (logoDataUrl) return logoDataUrl;
+    if (!logoUrl) return null;
+
+    // Prefer same-origin proxy to avoid CORS/canvas issues on mobile sharing.
+    // Keep a safe fallback to the raw URL for non-storage/signed URLs.
+    const looksLikePublicStorageObject =
+      logoUrl.includes("/storage/v1/object/") && logoUrl.includes("/public/tenant-logos/");
+
+    return looksLikePublicStorageObject
+      ? `/api/image-proxy?url=${encodeURIComponent(logoUrl)}`
+      : logoUrl;
+  }, [logoDataUrl]);
 
   const toDataURLFromImageUrl = useCallback(async (url: string) => {
     const res = await fetch(url, { mode: "cors", cache: "no-store" });
@@ -2527,7 +2539,7 @@ function PreviewModal(props: {
                             {props.tenant?.logo_url ? (
                               // eslint-disable-next-line @next/next/no-img-element
                               <img
-                                src={logoDataUrl || props.tenant.logo_url}
+                                src={getLogoSrc(props.tenant.logo_url) || ""}
                                 alt="Logo da empresa"
                                 className="h-18 w-45 object-contain"
                                 crossOrigin="anonymous"
