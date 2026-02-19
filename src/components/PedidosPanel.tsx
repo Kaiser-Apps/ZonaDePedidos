@@ -394,13 +394,71 @@ function dataUrlToFile(dataUrl: string, fileName: string) {
   return new File([u8arr], fileName, { type: mime });
 }
 
+function dataUrlToBlob(dataUrl: string): Blob {
+  const arr = dataUrl.split(",");
+  const mimeMatch = arr[0].match(/:(.*?);/);
+  const mime = mimeMatch ? mimeMatch[1] : "application/octet-stream";
+  const bstr = atob(arr[1]);
+  let n = bstr.length;
+  const u8arr = new Uint8Array(n);
+  while (n--) u8arr[n] = bstr.charCodeAt(n);
+  return new Blob([u8arr], { type: mime });
+}
+
+function isIOSDevice() {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent || "";
+  return /iPad|iPhone|iPod/i.test(ua);
+}
+
+function openImageInNewTab(dataUrl: string, title: string) {
+  const w = window.open("", "_blank");
+  if (!w) {
+    // fallback: try opening the data URL directly
+    window.open(dataUrl, "_blank");
+    return;
+  }
+
+  const html = `
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>${title}</title>
+  <style>
+    body{font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin:16px;}
+    .hint{font-size:14px; color:#111; margin-bottom:12px;}
+    img{max-width:100%; height:auto; display:block;}
+  </style>
+</head>
+<body>
+  <div class="hint">No iPhone/iPad, toque e segure na imagem para salvar na galeria.</div>
+  <img src="${dataUrl}" alt="${title}" />
+</body>
+</html>`;
+  w.document.open();
+  w.document.write(html);
+  w.document.close();
+}
+
 function downloadDataUrl(dataUrl: string, filename: string) {
+  // iOS Safari often ignores `download` for data/object URLs.
+  if (isIOSDevice()) {
+    openImageInNewTab(dataUrl, filename);
+    return;
+  }
+
+  const blob = dataUrlToBlob(dataUrl);
+  const url = URL.createObjectURL(blob);
+
   const a = document.createElement("a");
-  a.href = dataUrl;
+  a.href = url;
   a.download = filename;
   document.body.appendChild(a);
   a.click();
   a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function isDuplicateErr(err: unknown) {
@@ -2031,12 +2089,51 @@ function PreviewModal(props: {
     if (!res.ok) throw new Error(`Falha ao baixar logo: ${res.status}`);
     const blob = await res.blob();
 
-    return await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onloadend = () => resolve(String(reader.result));
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
+    const blobToDataUrl = async (b: Blob) => {
+      return await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(String(reader.result));
+        reader.onerror = reject;
+        reader.readAsDataURL(b);
+      });
+    };
+
+    const toPngFromSvgDataUrl = async (svgDataUrl: string) => {
+      // Safari/WhatsApp are notably flaky rendering SVG inside html-to-image.
+      // Rasterizing to PNG increases reliability.
+      const img = new Image();
+      img.decoding = "async";
+
+      await new Promise<void>((resolve) => {
+        const done = () => resolve();
+        img.onload = done;
+        img.onerror = done;
+        img.src = svgDataUrl;
+      });
+
+      // If it failed to load, keep original.
+      const w = img.naturalWidth || 520;
+      const h = img.naturalHeight || 160;
+
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return svgDataUrl;
+
+      ctx.clearRect(0, 0, w, h);
+      ctx.drawImage(img, 0, 0, w, h);
+      return canvas.toDataURL("image/png");
+    };
+
+    const dataUrl = await blobToDataUrl(blob);
+    const isSvg =
+      blob.type.includes("image/svg") ||
+      dataUrl.startsWith("data:image/svg+xml") ||
+      url.toLowerCase().includes(".svg");
+
+    return isSvg ? await toPngFromSvgDataUrl(dataUrl) : dataUrl;
   }, []);
 
   const tryLoadLogoDataUrl = useCallback(
@@ -2319,9 +2416,33 @@ function PreviewModal(props: {
       const built = await buildPngPages();
       if (!built) return;
 
-      for (const p of built.pages) {
-        downloadDataUrl(p.dataUrl, p.fileName);
+      const files = built.pages.map((p) => dataUrlToFile(p.dataUrl, p.fileName));
+
+      const navAny = navigator as Navigator & {
+        share?: (data: ShareData) => Promise<void>;
+        canShare?: (data: ShareData) => boolean;
+      };
+
+      const canShareFiles =
+        typeof navAny.share === "function" &&
+        typeof navAny.canShare === "function" &&
+        navAny.canShare({ files }) === true;
+
+      // On mobile (especially iOS), using the share sheet is the most reliable
+      // way for the user to save to Photos/Gallery.
+      if (canShareFiles) {
+        await navAny.share({
+          title: "Pedido",
+          text:
+            files.length > 1
+              ? "Para salvar na galeria, use a opção 'Salvar Imagem' (páginas)."
+              : "Para salvar na galeria, use a opção 'Salvar Imagem'.",
+          files,
+        });
+        return;
       }
+
+      for (const p of built.pages) downloadDataUrl(p.dataUrl, p.fileName);
     } catch (err: unknown) {
       console.log("[PEDIDOS] download image error:", err);
       alert("Não foi possível baixar a imagem. Veja o console para detalhes.");
@@ -2332,7 +2453,7 @@ function PreviewModal(props: {
 
   return (
     <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center">
-      <div className="bg-white rounded-lg w-5xl shadow-lg overflow-hidden">
+      <div className="bg-white rounded-lg w-[95vw] max-w-5xl max-h-[92vh] shadow-lg overflow-hidden flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b">
           <div className="font-bold text-lg">Pré-visualização</div>
           <button
@@ -2344,8 +2465,8 @@ function PreviewModal(props: {
           </button>
         </div>
 
-        <div className="p-5">
-          <div ref={stageRef} className="overflow-auto h-[75vh]">
+        <div className="p-5 flex-1 min-h-0">
+          <div ref={stageRef} className="overflow-auto h-full">
             <div className="flex justify-center">
               <div
                 style={{
@@ -2573,7 +2694,7 @@ function PreviewModal(props: {
           </div>
         </div>
 
-        <div className="px-5 py-4 border-t flex items-center justify-end gap-2">
+        <div className="px-5 py-4 border-t bg-white shrink-0 sticky bottom-0 flex flex-wrap items-center justify-end gap-2">
           <button
             className="border px-3 py-2 rounded inline-flex items-center gap-2"
             onClick={printPreview}
@@ -2593,7 +2714,7 @@ function PreviewModal(props: {
             </button>
 
             {shareOpen && (
-              <div className="absolute right-0 bottom-12 z-50 w-64 rounded border bg-white shadow overflow-hidden">
+              <div className="absolute right-0 bottom-full mb-2 z-50 w-64 rounded border bg-white shadow overflow-hidden">
                 <button
                   type="button"
                   className="w-full px-3 py-2 flex items-center gap-2 hover:bg-gray-50"
