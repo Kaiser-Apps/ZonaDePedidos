@@ -341,175 +341,34 @@ function buildShareText(order: OrderRow, tenant: TenantInfo | null) {
   return lines.join("\n");
 }
 
-function escapeHtml(str: string) {
-  return (str || "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
-}
+function openPrintWindowFromElement(el: HTMLElement) {
+  const w = window.open("", "_blank", "width=900,height=700");
+  if (!w) return alert("Pop-up bloqueado. Permita pop-ups para imprimir.");
 
-function openPrintWindow(order: OrderRow, tenant: TenantInfo | null) {
-  const itens = parseDescriptionToPreviewItems(order.descricao);
-  const subtotalItens = itens.reduce((acc, it) => acc + (it.value || 0), 0);
-
-  const subtotal =
-    (order.valor_bruto != null && Number(order.valor_bruto) >= 0
-      ? Number(order.valor_bruto)
-      : 0) ||
-    (subtotalItens > 0 ? subtotalItens : 0) ||
-    Number(order.valor) ||
-    0;
-
-  const discountType: DiscountType =
-    order.desconto_tipo === "percent"
-      ? "percent"
-      : order.desconto_tipo === "amount"
-      ? "amount"
-      : "none";
-
-  const discountValueStr =
-    discountType === "percent"
-      ? String(order.desconto_valor ?? 0)
-      : maskBRL(String(Math.round(Number(order.desconto_valor || 0) * 100)));
-
-  const { discount, total } = calcDiscount(subtotal, discountType, discountValueStr);
-  const totalFinal = Number(order.valor || 0) || total;
+  const headStyles = Array.from(
+    document.querySelectorAll('link[rel="stylesheet"], style')
+  )
+    .map((n) => n.outerHTML)
+    .join("\n");
 
   const html = `
 <!doctype html>
 <html>
 <head>
   <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>Pedido</title>
+  ${headStyles}
   <style>
     @page { size: A4; margin: 12mm; }
     html, body { height: 100%; }
-    body { font-family: Arial, sans-serif; margin: 0; padding: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-
-    .box { border: 2px solid #111; padding: 10mm; border-radius: 8px; box-sizing: border-box; }
-
-    .muted { color: #111; font-size: 14px; }
-    .hr { border-top: 2px solid #111; margin: 10px 0; }
-
-    table { width:100%; border-collapse: collapse; margin-top: 10px; page-break-inside: auto; }
-    thead { display: table-header-group; } /* repete cabeçalho */
-    tfoot { display: table-footer-group; }
-
-    tr { page-break-inside: avoid; page-break-after: auto; }
-    th, td { border: 2px solid #111; padding: 8px; font-size: 14px; vertical-align: top; }
-    th { text-align:left; background: #f5f5f5; }
-
-    .right { text-align:right; }
-
-    .totals { margin-top: 10px; font-size: 14px; break-inside: avoid; page-break-inside: avoid; }
-    .totals .row { display:flex; justify-content:flex-end; gap:16px; margin-top: 6px; }
-    .totals .label { min-width: 110px; text-align:right; }
-    .totals .value { min-width: 140px; text-align:right; font-weight: 700; }
-    .grand { font-weight: 900; font-size: 18px; }
-
-    /* opcional: evita quebras estranhas no topo */
-    .avoid-break { break-inside: avoid; page-break-inside: avoid; }
+    body { margin: 0; padding: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .print-stage { width: 100%; display: flex; justify-content: center; }
+    .print-stage > * { box-shadow: none !important; }
   </style>
-
 </head>
 <body>
-  <div class="box">
-    <div class="muted">
-      ${
-        tenant?.logo_url
-          ? `<div style="margin-bottom:8px;"><img src="${tenant.logo_url}" alt="Logo" style="max-height:80px; max-width:260px; object-fit:contain;" /></div>`
-          : ""
-      }
-      <div><b>${tenant?.name || ""}</b></div>
-      <div>${tenant?.cnpj ? `<b>CNPJ:</b> ${tenant.cnpj}` : ""} ${
-    tenant?.ie ? `&nbsp;&nbsp;<b>IE:</b> ${tenant.ie}` : ""
-  }</div>
-      <div>${tenant?.endereco ? `<b>Endereço:</b> ${tenant.endereco}` : ""}</div>
-      <div>${tenant?.phone ? `<b>Fone:</b> ${maskPhone(tenant.phone)}` : ""}</div>
-    </div>
-
-    <div class="hr"></div>
-
-    <div class="muted" style="display:flex; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
-      <div><b>Data:</b> ${order.dt_entrada}</div>
-      <div><b>Status:</b> ${order.status}</div>
-      <div><b>Cliente:</b> ${escapeHtml(order.cliente_nome)}</div>
-      <div><b>Fone:</b> ${
-        order.cliente_telefone ? maskPhone(order.cliente_telefone) : ""
-      }</div>
-    </div>
-
-    ${
-      order.produto
-        ? `<div class="muted" style="margin-top:8px;"><b>Produto:</b> ${escapeHtml(
-            order.produto
-          )}</div>`
-        : ""
-    }
-
-    <div class="hr"></div>
-
-    <div style="text-align:center; font-weight:700; margin: 6px 0;">
-      ${escapeHtml(order.item || "")}
-    </div>
-
-    ${
-      order.observacao
-        ? `<div class="muted avoid-break" style="margin: 10px 0; padding: 8px; border: 2px dashed #111; border-radius: 6px;">
-            <b>Observação:</b> ${escapeHtml(order.observacao)}
-           </div>`
-        : ""
-    }
-
-    <div class="hr"></div>
-
-    <table>
-      <thead>
-        <tr>
-          <th style="width:60px;">Item</th>
-          <th>Descrição</th>
-          <th class="right" style="width:140px;">Valor</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${
-          itens.length === 0
-            ? `<tr><td>1</td><td>—</td><td class="right">${formatBRLFromNumber(
-                subtotal
-              )}</td></tr>`
-            : itens
-                .map(
-                  (it) => `
-          <tr>
-            <td>${it.n}</td>
-            <td>${escapeHtml(it.desc)}</td>
-            <td class="right">${formatBRLFromNumber(it.value)}</td>
-          </tr>`
-                )
-                .join("")
-        }
-      </tbody>
-    </table>
-
-    <div class="totals">
-      <div class="row"><div class="label">SUBTOTAL:</div><div class="value">${formatBRLFromNumber(
-        subtotal
-      )}</div></div>
-      ${
-        discount > 0
-          ? `<div class="row"><div class="label">DESCONTO:</div><div class="value">-${formatBRLFromNumber(
-              discount
-            )}${discountType === "percent" ? ` (${order.desconto_valor ?? 0}%)` : ""}</div></div>`
-          : ""
-      }
-      <div class="row grand"><div class="label">TOTAL:</div><div class="value">${formatBRLFromNumber(
-        totalFinal
-      )}</div></div>
-    </div>
-  </div>
-
+  <div class="print-stage">${el.outerHTML}</div>
   <script>
     window.onload = () => {
       window.focus();
@@ -519,8 +378,6 @@ function openPrintWindow(order: OrderRow, tenant: TenantInfo | null) {
 </body>
 </html>`;
 
-  const w = window.open("", "_blank", "width=900,height=700");
-  if (!w) return alert("Pop-up bloqueado. Permita pop-ups para imprimir.");
   w.document.open();
   w.document.write(html);
   w.document.close();
@@ -2061,7 +1918,6 @@ export default function PedidosPanel() {
           tenantLoading={tenantLoading}
           order={previewOrder}
           onClose={() => setPreviewOpen(false)}
-          onPrint={() => openPrintWindow(previewOrder, tenantInfo)}
           onShare={async () => {
             const text = buildShareText(previewOrder, tenantInfo);
             await navigator.clipboard.writeText(text);
@@ -2110,7 +1966,6 @@ function PreviewModal(props: {
   tenantLoading: boolean;
   order: OrderRow;
   onClose: () => void;
-  onPrint: () => void;
   onShare: () => void;
 }) {
   const itens = useMemo(
@@ -2234,6 +2089,16 @@ function PreviewModal(props: {
   const [sharingImg, setSharingImg] = useState(false);
   const [downloadingImg, setDownloadingImg] = useState(false);
   const shareBoxRef = useRef<HTMLDivElement | null>(null);
+
+  const printPreview = useCallback(() => {
+    const el = previewRef.current;
+    if (!el) {
+      alert("Não foi possível imprimir: preview indisponível.");
+      return;
+    }
+
+    openPrintWindowFromElement(el);
+  }, []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -2711,7 +2576,7 @@ function PreviewModal(props: {
         <div className="px-5 py-4 border-t flex items-center justify-end gap-2">
           <button
             className="border px-3 py-2 rounded inline-flex items-center gap-2"
-            onClick={props.onPrint}
+            onClick={printPreview}
           >
             <Printer size={16} />
             Imprimir
