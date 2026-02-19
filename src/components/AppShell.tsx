@@ -108,31 +108,40 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const run = async () => {
+      let redirected = false;
+      const redirect = (to: string) => {
+        redirected = true;
+        // Keep the shell in "loading" state to avoid flashing protected UI
+        // while the router is navigating.
+        setLoading(true);
+        router.replace(to);
+      };
+
       try {
         const { data: sessionData, error: sessErr } =
           await supabase.auth.getSession();
 
         if (sessErr) {
           console.log("[APP SHELL] getSession error:", sessErr);
-          router.replace("/login");
+          redirect("/login");
           return;
         }
 
         if (!sessionData.session) {
-          router.replace("/login");
+          redirect("/login");
           return;
         }
 
         const { data: userData, error: userErr } = await supabase.auth.getUser();
         if (userErr) {
           console.log("[APP SHELL] getUser error:", userErr);
-          router.replace("/login");
+          redirect("/login");
           return;
         }
 
         const userId = userData?.user?.id;
         if (!userId) {
-          router.replace("/login");
+          redirect("/login");
           return;
         }
 
@@ -146,7 +155,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
         if (profErr) {
           console.log("[APP SHELL] profiles error:", profErr);
-          router.replace("/login");
+          redirect("/login");
           return;
         }
 
@@ -165,7 +174,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             const ensureJson: unknown = await ensureRes.json().catch(() => ({}));
             if (!ensureRes.ok) {
               console.log("[APP SHELL] ensure-tenant failed:", ensureJson);
-              router.replace("/cadastro");
+              redirect("/cadastro");
               return;
             }
 
@@ -180,7 +189,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                 profErr2,
                 ensureJson,
               });
-              router.replace("/cadastro");
+              redirect("/cadastro");
               return;
             }
 
@@ -188,7 +197,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             setIsAdmin(role2 === "admin");
           } catch (e) {
             console.log("[APP SHELL] ensure-tenant unexpected:", e);
-            router.replace("/cadastro");
+            redirect("/cadastro");
             return;
           }
         } else {
@@ -227,16 +236,16 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         ) {
           const allowed = isAccessAllowed(t);
           if (!allowed) {
-            router.replace("/assinatura");
+            redirect("/assinatura");
             return;
           }
         }
       } catch (e) {
         console.log("[APP SHELL] unexpected:", e);
-        router.replace("/login");
+        redirect("/login");
         return;
       } finally {
-        setLoading(false);
+        if (!redirected) setLoading(false);
       }
     };
 
