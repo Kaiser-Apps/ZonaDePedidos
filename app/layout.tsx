@@ -31,6 +31,9 @@ export const metadata: Metadata = {
   },
   description: "Gestão simples e rápida de pedidos e orçamentos.",
   applicationName: "Zona de Pedidos",
+  verification: {
+    google: "aV9QjYfte7N_PdYN0suBgF0yiS687gQIiXpGNPHW1dg",
+  },
 };
 
 export const viewport: Viewport = {
