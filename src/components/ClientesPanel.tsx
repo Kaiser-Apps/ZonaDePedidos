@@ -20,6 +20,60 @@ type ClientRow = {
   created_at: string;
 };
 
+type ClientOrdersCountRow = {
+  client_id: string | null;
+  status: string | null;
+  count: number | string | null;
+};
+
+type OrderMiniRow = {
+  client_id: string | null;
+  status: string | null;
+  cliente_telefone: string | null;
+  dt_entrada?: string | null;
+  created_at?: string | null;
+};
+
+type LastOrderAggRow = {
+  client_id: string | null;
+  last_dt: string | null;
+  last_created: string | null;
+};
+
+type LastOrderPhoneAggRow = {
+  cliente_telefone: string | null;
+  last_dt: string | null;
+  last_created: string | null;
+};
+
+const ORDER_STATUSES = [
+  "aberto",
+  "orçamento",
+  "aguardando retirada",
+  "a receber",
+  "pago",
+  "arquivado",
+] as const;
+
+function statusBadgeClass(status: (typeof ORDER_STATUSES)[number]) {
+  switch (status) {
+    case "aberto":
+      return "bg-blue-50 text-blue-700 border-blue-200";
+    case "orçamento":
+      return "bg-purple-50 text-purple-700 border-purple-200";
+    case "aguardando retirada":
+      return "bg-orange-50 text-orange-700 border-orange-200";
+    case "a receber":
+      return "bg-yellow-50 text-yellow-800 border-yellow-200";
+    case "pago":
+      return "bg-emerald-50 text-emerald-700 border-emerald-200";
+    case "arquivado":
+      return "bg-gray-50 text-gray-700 border-gray-200";
+    default:
+      return "bg-gray-50 text-gray-700 border-gray-200";
+  }
+}
+
 type ClientForm = {
   id?: string;
   telefone: string;
@@ -114,14 +168,324 @@ export default function ClientesPanel() {
   const [ctxLoading, setCtxLoading] = useState(true);
 
   const [q, setQ] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"" | (typeof ORDER_STATUSES)[number]>(
+    ""
+  );
   const [loadingList, setLoadingList] = useState(false);
   const [rows, setRows] = useState<ClientRow[]>([]);
+
+  const [lastOrderByClient, setLastOrderByClient] = useState<
+    Record<string, { dt: string | null; created: string | null }>
+  >({});
+
+  const [ordersCountsLoading, setOrdersCountsLoading] = useState(false);
+  const [ordersCountsByClient, setOrdersCountsByClient] = useState<
+    Record<string, Record<string, number>>
+  >({});
 
   const [form, setForm] = useState<ClientForm>(emptyForm);
   const [saving, setSaving] = useState(false);
   const [formOpen, setFormOpen] = useState(false);
 
   const isEdit = useMemo(() => Boolean(form.id), [form.id]);
+
+  const sortedRows = useMemo(() => {
+    const toTime = (v: string | null | undefined) => {
+      if (!v) return 0;
+      const t = Date.parse(v);
+      return Number.isFinite(t) ? t : 0;
+    };
+
+    const lastKey = (clientId: string) => {
+      const m = lastOrderByClient?.[clientId];
+      if (!m) return 0;
+      // dt_entrada is YYYY-MM-DD; treat as UTC midnight to compare.
+      const dt = m.dt ? `${m.dt}T00:00:00.000Z` : null;
+      return Math.max(toTime(dt), toTime(m.created));
+    };
+
+    const copy = [...rows];
+    copy.sort((a, b) => {
+      const ta = lastKey(a.id);
+      const tb = lastKey(b.id);
+      if (ta !== tb) return tb - ta;
+
+      // fallback: keep recent clients first
+      const ca = toTime(a.created_at);
+      const cb = toTime(b.created_at);
+      if (ca !== cb) return cb - ca;
+
+      return String(a.nome || "").localeCompare(String(b.nome || ""), "pt-BR");
+    });
+
+    return copy;
+  }, [rows, lastOrderByClient]);
+
+  const visibleRows = useMemo(() => {
+    if (!statusFilter) return sortedRows;
+    if (ordersCountsLoading) return sortedRows;
+    return sortedRows.filter(
+      (r) => (ordersCountsByClient?.[r.id]?.[statusFilter] ?? 0) > 0
+    );
+  }, [sortedRows, statusFilter, ordersCountsByClient, ordersCountsLoading]);
+
+  const loadOrdersMiniByClientId = async (clientIds: string[]) => {
+    if (!ctx) return [] as OrderMiniRow[];
+
+    const chunkSize = 40;
+    const pageSize = 1000;
+    const all: OrderMiniRow[] = [];
+
+    for (let i = 0; i < clientIds.length; i += chunkSize) {
+      const chunk = clientIds.slice(i, i + chunkSize);
+      let from = 0;
+
+      while (true) {
+        const { data, error } = await supabase
+          .from("orders")
+          .select("client_id, status, cliente_telefone, dt_entrada, created_at")
+          .eq("tenant_id", ctx.tenantId)
+          .in("client_id", chunk)
+          .range(from, from + pageSize - 1);
+
+        if (error) {
+          console.log("load orders mini (by client_id) error:", error);
+          break;
+        }
+
+        const batch = (data || []) as OrderMiniRow[];
+        all.push(...batch);
+        if (batch.length < pageSize) break;
+        from += pageSize;
+      }
+    }
+
+    return all;
+  };
+
+  const loadOrdersMiniByPhoneWhenNoClientId = async (phones: string[]) => {
+    if (!ctx) return [] as OrderMiniRow[];
+
+    const cleanPhones = phones.map((p) => onlyDigits(p || "")).filter(Boolean);
+    if (cleanPhones.length === 0) return [] as OrderMiniRow[];
+
+    const chunkSize = 60;
+    const pageSize = 1000;
+    const all: OrderMiniRow[] = [];
+
+    for (let i = 0; i < cleanPhones.length; i += chunkSize) {
+      const chunk = cleanPhones.slice(i, i + chunkSize);
+      let from = 0;
+
+      while (true) {
+        const { data, error } = await supabase
+          .from("orders")
+          .select("client_id, status, cliente_telefone, dt_entrada, created_at")
+          .eq("tenant_id", ctx.tenantId)
+          .is("client_id", null)
+          .in("cliente_telefone", chunk)
+          .range(from, from + pageSize - 1);
+
+        if (error) {
+          console.log("load orders mini (by phone) error:", error);
+          break;
+        }
+
+        const batch = (data || []) as OrderMiniRow[];
+        all.push(...batch);
+        if (batch.length < pageSize) break;
+        from += pageSize;
+      }
+    }
+
+    return all;
+  };
+
+  const loadLastOrdersForClients = async (nextRows: ClientRow[]) => {
+    if (!ctx) return;
+
+    const clientIds = nextRows.map((r) => r.id);
+    if (clientIds.length === 0) {
+      setLastOrderByClient({});
+      return;
+    }
+
+    const phoneToClientId: Record<string, string> = {};
+    for (const r of nextRows) {
+      const tel = onlyDigits(r.telefone || "");
+      if (tel) phoneToClientId[tel] = r.id;
+    }
+    const phones = Object.keys(phoneToClientId);
+
+    try {
+      const baseMap: Record<string, { dt: string | null; created: string | null }> = {};
+
+      const { data: byId, error: errById } = await supabase
+        .from("orders")
+        .select("client_id, last_dt:dt_entrada.max(), last_created:created_at.max()")
+        .eq("tenant_id", ctx.tenantId)
+        .in("client_id", clientIds);
+
+      if (!errById) {
+        for (const r of ((byId || []) as LastOrderAggRow[])) {
+          if (!r.client_id) continue;
+          baseMap[String(r.client_id)] = {
+            dt: r.last_dt ?? null,
+            created: r.last_created ?? null,
+          };
+        }
+      }
+
+      const { data: byPhone, error: errByPhone } = await supabase
+        .from("orders")
+        .select("cliente_telefone, last_dt:dt_entrada.max(), last_created:created_at.max()")
+        .eq("tenant_id", ctx.tenantId)
+        .is("client_id", null)
+        .in("cliente_telefone", phones);
+
+      if (!errByPhone) {
+        for (const r of ((byPhone || []) as LastOrderPhoneAggRow[])) {
+          const tel = onlyDigits(String(r.cliente_telefone || ""));
+          const cid = tel ? phoneToClientId[tel] : "";
+          if (!cid) continue;
+
+          const existing = baseMap[cid] || { dt: null, created: null };
+          // keep the most recent values
+          baseMap[cid] = {
+            dt: r.last_dt || existing.dt,
+            created: r.last_created || existing.created,
+          };
+        }
+      }
+
+      // If both aggregates came empty (or errored), fallback by scanning minimal rows
+      const emptyAgg = Object.keys(baseMap).length === 0 && (errById || errByPhone);
+      if (emptyAgg) {
+        const ordersById = await loadOrdersMiniByClientId(clientIds);
+        const ordersByPhone = await loadOrdersMiniByPhoneWhenNoClientId(phones);
+
+        const toTime = (v: string | null | undefined) => {
+          if (!v) return 0;
+          const t = Date.parse(v);
+          return Number.isFinite(t) ? t : 0;
+        };
+
+        const setIfNewer = (cid: string, dt: string | null, created: string | null) => {
+          const cur = baseMap[cid] || { dt: null, created: null };
+          const curKey = Math.max(
+            toTime(cur.dt ? `${cur.dt}T00:00:00.000Z` : null),
+            toTime(cur.created)
+          );
+          const nextKey = Math.max(
+            toTime(dt ? `${dt}T00:00:00.000Z` : null),
+            toTime(created)
+          );
+          if (nextKey > curKey) baseMap[cid] = { dt, created };
+        };
+
+        for (const o of ordersById) {
+          if (!o.client_id) continue;
+          setIfNewer(String(o.client_id), o.dt_entrada ?? null, o.created_at ?? null);
+        }
+
+        for (const o of ordersByPhone) {
+          const tel = onlyDigits(String(o.cliente_telefone || ""));
+          const cid = tel ? phoneToClientId[tel] : "";
+          if (!cid) continue;
+          setIfNewer(cid, o.dt_entrada ?? null, o.created_at ?? null);
+        }
+      }
+
+      setLastOrderByClient(baseMap);
+    } catch (e) {
+      console.log("load last orders error:", e);
+      setLastOrderByClient({});
+    }
+  };
+
+  const loadOrdersCountsForClients = async (clientIds: string[]) => {
+    if (!ctx) return;
+
+    if (clientIds.length === 0) {
+      setOrdersCountsByClient({});
+      return;
+    }
+
+    setOrdersCountsLoading(true);
+
+    try {
+      const { data, error } = await supabase
+        .from("orders")
+        // PostgREST aggregate: alias:column.aggregate()
+        // groups by the non-aggregated columns (client_id, status)
+        .select("client_id, status, count:id.count()")
+        .eq("tenant_id", ctx.tenantId)
+        .in("client_id", clientIds);
+
+      const hasAggRows = Array.isArray(data) && data.length > 0;
+
+      if (!error && hasAggRows) {
+        const map: Record<string, Record<string, number>> = {};
+        const list = (data || []) as ClientOrdersCountRow[];
+
+        for (const r of list) {
+          if (!r.client_id || !r.status) continue;
+          const st = String(r.status);
+          if (!ORDER_STATUSES.includes(st as (typeof ORDER_STATUSES)[number])) continue;
+          const nRaw = r.count;
+          const n = typeof nRaw === "number" ? nRaw : Number(nRaw || 0);
+          if (!map[r.client_id]) map[r.client_id] = {};
+          map[r.client_id][st] = Number.isFinite(n) ? n : 0;
+        }
+
+        setOrdersCountsByClient(map);
+        return;
+      }
+
+      if (error) {
+        console.log("load orders counts (aggregate) error:", error);
+      }
+
+      // Fallback robusto:
+      // 1) conta por client_id (mesmo se aggregate falhar)
+      // 2) se existirem pedidos antigos sem client_id, conta por telefone
+      const ordersById = await loadOrdersMiniByClientId(clientIds);
+
+      // Mapeia telefone -> clientId para associar pedidos sem client_id
+      const phoneToClientId: Record<string, string> = {};
+      for (const r of rows) {
+        const tel = onlyDigits(r.telefone || "");
+        if (tel) phoneToClientId[tel] = r.id;
+      }
+
+      const phones = Object.keys(phoneToClientId);
+      const ordersByPhone = await loadOrdersMiniByPhoneWhenNoClientId(phones);
+
+      const map: Record<string, Record<string, number>> = {};
+
+      const inc = (clientId: string, status: string) => {
+        if (!ORDER_STATUSES.includes(status as (typeof ORDER_STATUSES)[number])) return;
+        if (!map[clientId]) map[clientId] = {};
+        map[clientId][status] = (map[clientId][status] || 0) + 1;
+      };
+
+      for (const o of ordersById) {
+        if (!o.client_id || !o.status) continue;
+        inc(String(o.client_id), String(o.status));
+      }
+
+      for (const o of ordersByPhone) {
+        const tel = onlyDigits(o.cliente_telefone || "");
+        const cid = tel ? phoneToClientId[tel] : "";
+        if (!cid || !o.status) continue;
+        inc(cid, String(o.status));
+      }
+
+      setOrdersCountsByClient(map);
+    } finally {
+      setOrdersCountsLoading(false);
+    }
+  };
 
   // 1) Descobre user + tenant_id (via profiles)
   useEffect(() => {
@@ -181,6 +545,7 @@ export default function ClientesPanel() {
     const query = supabase
       .from("clients")
       .select("id, telefone, nome, endereco, cpf, cnpj, ie, created_at")
+      .eq("tenant_id", ctx.tenantId)
       .order("created_at", { ascending: false })
       .limit(200);
 
@@ -207,7 +572,10 @@ export default function ClientesPanel() {
       return;
     }
 
-    setRows((data || []) as ClientRow[]);
+    const nextRows = (data || []) as ClientRow[];
+    setRows(nextRows);
+    loadOrdersCountsForClients(nextRows.map((r) => r.id));
+    loadLastOrdersForClients(nextRows);
   };
 
   useEffect(() => {
@@ -452,9 +820,7 @@ export default function ClientesPanel() {
         <div className="flex flex-col md:flex-row md:items-center gap-3 md:justify-between">
           <div>
             <div className="font-bold text-lg">Lista de Clientes</div>
-            <div className="text-sm text-gray-600">
-              Clique em um cliente para editar.
-            </div>
+            <div className="text-sm text-gray-600"></div>
           </div>
 
           <div className="flex gap-2">
@@ -467,6 +833,26 @@ export default function ClientesPanel() {
                 if (e.key === "Enter") loadClients();
               }}
             />
+
+            <select
+              className="border rounded px-3 py-2"
+              value={statusFilter}
+              onChange={(e) =>
+                setStatusFilter(
+                  (e.target.value || "") as "" | (typeof ORDER_STATUSES)[number]
+                )
+              }
+              title="Filtrar clientes por status de pedido"
+              disabled={ordersCountsLoading}
+            >
+              <option value="">Todos</option>
+              {ORDER_STATUSES.map((st) => (
+                <option key={st} value={st}>
+                  {st}
+                </option>
+              ))}
+            </select>
+
             <button
               onClick={loadClients}
               className="border px-3 py-2 rounded"
@@ -485,18 +871,19 @@ export default function ClientesPanel() {
                 <th className="border px-3 py-2">Telefone</th>
                 <th className="border px-3 py-2">CPF</th>
                 <th className="border px-3 py-2">CNPJ</th>
+                <th className="border px-2 py-2 w-48">Pedidos</th>
                 <th className="border px-3 py-2">Ações</th>
               </tr>
             </thead>
             <tbody>
-              {rows.length === 0 ? (
+              {visibleRows.length === 0 ? (
                 <tr>
-                  <td className="border px-3 py-3 text-gray-600" colSpan={5}>
+                  <td className="border px-3 py-3 text-gray-600" colSpan={6}>
                     Nenhum cliente encontrado.
                   </td>
                 </tr>
               ) : (
-                rows.map((r) => (
+                visibleRows.map((r) => (
                   <tr key={r.id} className="hover:bg-gray-50">
                     <td
                       className="border px-3 py-2 cursor-pointer"
@@ -512,6 +899,45 @@ export default function ClientesPanel() {
                     </td>
                     <td className="border px-3 py-2">
                       {r.cnpj ? maskCNPJ(r.cnpj) : ""}
+                    </td>
+
+                    <td className="border px-2 py-2 text-xs text-gray-700 w-48">
+                      {ordersCountsLoading ? (
+                        <span className="text-gray-500">Carregando...</span>
+                      ) : (
+                        <div className="flex flex-col gap-1">
+                          {(() => {
+                            const badges = ORDER_STATUSES.map((st) => {
+                              const n = ordersCountsByClient?.[r.id]?.[st] ?? 0;
+                              if (!n) return null;
+
+                              return (
+                                <span
+                                  key={st}
+                                  className={
+                                    "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium " +
+                                    statusBadgeClass(st)
+                                  }
+                                  title={`${st}: ${n}`}
+                                >
+                                  <span className="capitalize">{st}</span>
+                                  <span className="tabular-nums">{n}</span>
+                                </span>
+                              );
+                            }).filter(Boolean);
+
+                            if (badges.length === 0) {
+                              return (
+                                <span className="text-gray-400 text-[11px]">
+                                  sem registro de pedidos
+                                </span>
+                              );
+                            }
+
+                            return badges;
+                          })()}
+                        </div>
+                      )}
                     </td>
 
                     <td className="border px-3 py-2">

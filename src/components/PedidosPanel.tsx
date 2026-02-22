@@ -361,10 +361,17 @@ function openPrintWindowFromElement(el: HTMLElement) {
   ${headStyles}
   <style>
     @page { size: A4; margin: 12mm; }
-    html, body { height: 100%; }
+    html, body { height: auto; }
     body { margin: 0; padding: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .print-stage { width: 100%; display: flex; justify-content: center; }
     .print-stage > * { box-shadow: none !important; }
+    @media print {
+      html, body { height: auto !important; }
+      .print-stage { display: block; }
+      .print-stage > * { margin: 0 auto; }
+      /* Remove altura A4 em px (na UI) para não estourar a área útil do papel com margens */
+      .print-paper { min-height: 0 !important; height: auto !important; }
+    }
   </style>
 </head>
 <body>
@@ -1855,27 +1862,25 @@ export default function PedidosPanel(props: { clientIdFilter?: string } = {}) {
         </div>
 
         <div className="flex flex-wrap gap-2 items-center">
-          {statusCountsLoading ? (
-            <div className="text-xs text-gray-500 mr-2">Atualizando status...</div>
-          ) : (
-            visibleStatuses.map((s) => {
-              const count = statusCounts[s] || 0;
-              const label = `${s} (${count})`;
+          {!statusCountsLoading
+            ? visibleStatuses.map((s) => {
+                const count = statusCounts[s] || 0;
+                const label = `${s} (${count})`;
 
-              return (
-                <button
-                  key={s}
-                  onClick={() => setStatusTab(s)}
-                  className={`px-3 py-2 rounded border ${
-                    statusTab === s ? "bg-black text-white" : ""
-                  }`}
-                  title={label}
-                >
-                  {label}
-                </button>
-              );
-            })
-          )}
+                return (
+                  <button
+                    key={s}
+                    onClick={() => setStatusTab(s)}
+                    className={`px-3 py-2 rounded border ${
+                      statusTab === s ? "bg-black text-white" : ""
+                    }`}
+                    title={label}
+                  >
+                    {label}
+                  </button>
+                );
+              })
+            : null}
         </div>
 
         <div className="mt-4 overflow-auto">
@@ -2488,7 +2493,7 @@ export function PreviewModal(props: {
                   {/* ✅ ESTE é o container que será impresso/baixado */}
                   <div
                     ref={previewRef}
-                    className="rounded-lg bg-white text-slate-900 border border-slate-300"
+                    className="print-paper rounded-lg bg-white text-slate-900 border border-slate-300"
                     style={{
                       width: PAPER_W,
                       minHeight: A4_H,

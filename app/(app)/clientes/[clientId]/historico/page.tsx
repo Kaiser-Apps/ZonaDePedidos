@@ -29,7 +29,17 @@ type OrderMini = {
   produto: string | null;
   item: string | null;
   valor: number;
+  status: string;
 };
+
+const STATUSES = [
+  "aberto",
+  "orçamento",
+  "aguardando retirada",
+  "a receber",
+  "pago",
+  "arquivado",
+] as const;
 
 const onlyDigits = (v: string) => String(v || "").replace(/\D+/g, "");
 
@@ -66,6 +76,7 @@ export default function ClienteHistoricoPage({
   const [loading, setLoading] = useState(false);
   const [rows, setRows] = useState<OrderMini[]>([]);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState<"" | (typeof STATUSES)[number]>("");
   const [tenantLoading, setTenantLoading] = useState(false);
   const [tenantInfo, setTenantInfo] = useState<TenantInfo | null>(null);
 
@@ -77,6 +88,13 @@ export default function ClienteHistoricoPage({
   const [clientPhoneDigits, setClientPhoneDigits] = useState<string>("");
 
   const canLoad = useMemo(() => Boolean(ctx?.tenantId && clientId), [ctx, clientId]);
+
+  const visibleRows = useMemo(() => {
+    if (!statusFilter) return rows;
+    return rows.filter(
+      (r) => String(r.status || "").trim().toLowerCase() === String(statusFilter)
+    );
+  }, [rows, statusFilter]);
 
   useEffect(() => {
     let alive = true;
@@ -235,7 +253,7 @@ export default function ClienteHistoricoPage({
 
       let q = supabase
         .from("orders")
-        .select("id, created_at, dt_entrada, produto, item, valor")
+        .select("id, created_at, dt_entrada, produto, item, valor, status")
         .eq("tenant_id", ctx!.tenantId);
 
       // ✅ Compatibilidade: alguns pedidos antigos podem não ter client_id salvo,
@@ -307,8 +325,34 @@ export default function ClienteHistoricoPage({
         </div>
       ) : (
         <div className="border rounded p-4">
-          <div className="text-sm text-slate-600 mb-3">
-            {loading ? "Carregando pedidos..." : `Mostrando ${rows.length} pedido(s).`}
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-3">
+            <div className="text-sm text-slate-600">
+              {loading
+                ? "Carregando pedidos..."
+                : `Mostrando ${visibleRows.length} pedido(s).`}
+            </div>
+
+            <div className="flex items-center gap-2">
+              <div className="text-sm text-slate-600">Status</div>
+              <select
+                className="border rounded px-3 py-2 text-sm"
+                value={statusFilter}
+                onChange={(e) =>
+                  setStatusFilter(
+                    (e.target.value || "") as "" | (typeof STATUSES)[number]
+                  )
+                }
+                title="Filtrar por status"
+                disabled={loading}
+              >
+                <option value="">Todos</option>
+                {STATUSES.map((st) => (
+                  <option key={st} value={st}>
+                    {st}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
 
           <div className="overflow-auto">
@@ -318,22 +362,24 @@ export default function ClienteHistoricoPage({
                   <th className="border px-3 py-2 w-36">Data do pedido</th>
                   <th className="border px-3 py-2">Produto</th>
                   <th className="border px-3 py-2">Serviço</th>
+                  <th className="border px-3 py-2 w-40">Status</th>
                   <th className="border px-3 py-2 w-40 text-right">Valor</th>
                 </tr>
               </thead>
               <tbody>
-                {rows.length === 0 ? (
+                {visibleRows.length === 0 ? (
                   <tr>
-                    <td className="border px-3 py-3 text-slate-600" colSpan={4}>
+                    <td className="border px-3 py-3 text-slate-600" colSpan={5}>
                       Nenhum pedido encontrado para este cliente.
                     </td>
                   </tr>
                 ) : (
-                  rows.map((o) => (
+                  visibleRows.map((o) => (
                     <tr key={o.id} className="hover:bg-slate-50">
                       <td className="border px-3 py-2">{o.dt_entrada || ""}</td>
                       <td className="border px-3 py-2">{o.produto || ""}</td>
                       <td className="border px-3 py-2">{o.item || ""}</td>
+                      <td className="border px-3 py-2">{o.status || ""}</td>
                       <td className="border px-3 py-2 text-right">
                         <div className="flex items-center justify-end gap-2">
                           <span>{formatBRLFromNumber(Number(o.valor) || 0)}</span>
