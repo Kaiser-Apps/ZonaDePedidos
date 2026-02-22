@@ -36,14 +36,14 @@ type OrderMiniRow = {
 
 type LastOrderAggRow = {
   client_id: string | null;
-  last_dt: string | null;
-  last_created: string | null;
+  last_dt: string | number | null;
+  last_created: string | number | null;
 };
 
 type LastOrderPhoneAggRow = {
   cliente_telefone: string | null;
-  last_dt: string | null;
-  last_created: string | null;
+  last_dt: string | number | null;
+  last_created: string | number | null;
 };
 
 const ORDER_STATUSES = [
@@ -329,9 +329,11 @@ export default function ClientesPanel() {
       if (!errById) {
         for (const r of ((byId || []) as LastOrderAggRow[])) {
           if (!r.client_id) continue;
+          const dt = r.last_dt != null ? String(r.last_dt) : null;
+          const created = r.last_created != null ? String(r.last_created) : null;
           baseMap[String(r.client_id)] = {
-            dt: r.last_dt ?? null,
-            created: r.last_created ?? null,
+            dt,
+            created,
           };
         }
       }
@@ -350,10 +352,12 @@ export default function ClientesPanel() {
           if (!cid) continue;
 
           const existing = baseMap[cid] || { dt: null, created: null };
+          const dt = r.last_dt != null ? String(r.last_dt) : null;
+          const created = r.last_created != null ? String(r.last_created) : null;
           // keep the most recent values
           baseMap[cid] = {
-            dt: r.last_dt || existing.dt,
-            created: r.last_created || existing.created,
+            dt: dt || existing.dt,
+            created: created || existing.created,
           };
         }
       }
