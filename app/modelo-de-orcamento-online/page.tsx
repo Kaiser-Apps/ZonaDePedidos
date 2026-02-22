@@ -3,21 +3,21 @@ import Link from "next/link";
 import { ComoFuncionaInfo } from "@/components/ComoFuncionaInfo";
 
 export const metadata: Metadata = {
-  title: "Sistema de Pedidos Grátis para MEI",
+  title: "Modelo de Orçamento Online",
   description:
-    "Sistema de pedidos grátis para MEI e pequenas empresas: controle de pedidos e orçamentos, clientes e status em um gerenciador online simples.",
+    "Entenda como o Zona de Pedidos ajuda você a cadastrar pedidos e orçamentos, compartilhar com clientes e ver o histórico completo por cliente.",
   alternates: {
-    canonical: "/para-mei",
+    canonical: "/modelo-de-orcamento-online",
   },
   keywords: [
-    "sistema de pedidos grátis para MEI",
-    "sistema de pedidos grátis para pequenas empresas",
-    "sistema de orçamento grátis para autônomos",
-    "ferramenta grátis para controle de vendas e pedidos",
+    "modelo de orçamento online",
+    "orçamento online",
+    "sistema de orçamento",
+    "orçamento profissional",
   ],
 };
 
-export default function ParaMeiPage() {
+export default function ModeloDeOrcamentoOnlinePage() {
   return (
     <main className="min-h-screen">
       <div className="mx-auto max-w-3xl px-6 py-12">
@@ -25,7 +25,7 @@ export default function ParaMeiPage() {
           <div>
             <p className="text-sm text-slate-600">Zona de Pedidos</p>
             <h1 className="mt-2 text-3xl font-extrabold tracking-tight">
-              Sistema de Pedidos Grátis para MEI
+              Modelo de Orçamento Online
             </h1>
           </div>
           <div className="shrink-0 flex gap-2">

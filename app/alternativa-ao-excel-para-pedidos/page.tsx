@@ -3,21 +3,21 @@ import Link from "next/link";
 import { ComoFuncionaInfo } from "@/components/ComoFuncionaInfo";
 
 export const metadata: Metadata = {
-  title: "Sistema de Pedidos Grátis para MEI",
+  title: "Alternativa ao Excel para Pedidos",
   description:
-    "Sistema de pedidos grátis para MEI e pequenas empresas: controle de pedidos e orçamentos, clientes e status em um gerenciador online simples.",
+    "Entenda como o Zona de Pedidos ajuda você a cadastrar pedidos e orçamentos, compartilhar com clientes e ver o histórico completo por cliente.",
   alternates: {
-    canonical: "/para-mei",
+    canonical: "/alternativa-ao-excel-para-pedidos",
   },
   keywords: [
-    "sistema de pedidos grátis para MEI",
-    "sistema de pedidos grátis para pequenas empresas",
-    "sistema de orçamento grátis para autônomos",
-    "ferramenta grátis para controle de vendas e pedidos",
+    "alternativa ao excel para pedidos",
+    "controle de pedidos",
+    "sistema de pedidos",
+    "sem planilha",
   ],
 };
 
-export default function ParaMeiPage() {
+export default function AlternativaAoExcelParaPedidosPage() {
   return (
     <main className="min-h-screen">
       <div className="mx-auto max-w-3xl px-6 py-12">
@@ -25,7 +25,7 @@ export default function ParaMeiPage() {
           <div>
             <p className="text-sm text-slate-600">Zona de Pedidos</p>
             <h1 className="mt-2 text-3xl font-extrabold tracking-tight">
-              Sistema de Pedidos Grátis para MEI
+              Alternativa ao Excel para Pedidos
             </h1>
           </div>
           <div className="shrink-0 flex gap-2">

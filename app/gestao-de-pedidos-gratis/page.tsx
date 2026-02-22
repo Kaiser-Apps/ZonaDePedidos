@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { ComoFuncionaInfo } from "@/components/ComoFuncionaInfo";
 
 export const metadata: Metadata = {
   title: "Gestão de Pedidos Grátis",
@@ -43,49 +44,7 @@ export default function GestaoDePedidosGratisPage() {
           </div>
         </div>
 
-        <p className="mt-6 text-slate-700 leading-relaxed">
-          Fazer <strong>gestão de pedidos grátis</strong> é mais do que “anotar pedidos”.
-          É ter clareza de etapas, valores, clientes e pendências — e manter tudo acessível
-          para você (e sua equipe) em um fluxo simples.
-        </p>
-
-        <div className="mt-8 rounded-2xl border border-slate-200 bg-white p-6">
-          <h2 className="text-xl font-bold">Por que um gerenciador ajuda</h2>
-          <ul className="mt-4 list-disc pl-5 text-slate-700 space-y-2">
-            <li>Evita perder pedidos em conversas e anotações.</li>
-            <li>Facilita saber o que está “em aberto” e o que já foi finalizado.</li>
-            <li>Deixa mais simples oferecer orçamento e converter em pedido.</li>
-            <li>Centraliza clientes e histórico de atendimento.</li>
-          </ul>
-        </div>
-
-        <h2 className="mt-10 text-xl font-bold">Busca com intenção alta</h2>
-        <p className="mt-3 text-slate-700 leading-relaxed">
-          Pessoas que procuram “<strong>software gratuito para gestão de pedidos</strong>”
-          ou “<strong>gerenciador de pedidos grátis</strong>” normalmente já querem aplicar
-          isso no dia a dia. Por isso, este tipo de página costuma converter bem.
-        </p>
-
-        <div className="mt-10 flex flex-wrap gap-3">
-          <Link
-            href="/cadastro"
-            className="bg-black text-white px-5 py-2 rounded-xl text-sm font-semibold"
-          >
-            Criar conta grátis
-          </Link>
-          <Link
-            href="/controle-de-pedidos-gratis"
-            className="border border-slate-200 bg-white px-5 py-2 rounded-xl text-sm font-semibold"
-          >
-            Ver controle de pedidos grátis
-          </Link>
-          <Link
-            href="/para-mei"
-            className="border border-slate-200 bg-white px-5 py-2 rounded-xl text-sm font-semibold"
-          >
-            Ver para MEI
-          </Link>
-        </div>
+        <ComoFuncionaInfo />
       </div>
     </main>
   );
