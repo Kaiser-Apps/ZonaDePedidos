@@ -452,10 +452,6 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         ) : (
           <div className="min-w-0">{children}</div>
         )}
-
-        <footer className="mt-6 text-center text-xs text-slate-500">
-          © {new Date().getFullYear()} Zona de Pedidos
-        </footer>
       </main>
     </div>
   );

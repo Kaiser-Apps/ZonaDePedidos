@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import { Instagram } from "lucide-react";
 import "./globals.css";
 
 function getMetadataBase(): URL | undefined {
@@ -49,8 +50,21 @@ export default function RootLayout({
 }) {
   return (
     <html lang="pt-BR">
-      <body className="min-h-screen bg-[#F3F7F4] text-slate-900">
-        {children}
+      <body className="min-h-screen bg-[#F3F7F4] text-slate-900 flex flex-col">
+        <div className="flex-1">{children}</div>
+
+        <footer className="border-t border-slate-200 py-6 text-center text-xs text-slate-500">
+          © 2026 Zona de Pedidos ·{" "}
+          <a
+            href="https://www.instagram.com/zonadepedidos/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center align-middle text-pink-600"
+            aria-label="Instagram @zonadepedidos"
+          >
+            <Instagram size={16} />
+          </a>
+        </footer>
       </body>
     </html>
   );

@@ -274,7 +274,7 @@ function parseDescriptionToPreviewItems(desc: string | null): PreviewItem[] {
   return items;
 }
 
-function buildShareText(order: OrderRow, tenant: TenantInfo | null) {
+export function buildShareText(order: OrderRow, tenant: TenantInfo | null) {
   const cliente = (order.cliente_nome || "").trim() || "Cliente";
   const empresa = (tenant?.name || "").trim() || "nossa empresa";
   const status = String(order.status || "").trim().toLowerCase();
@@ -489,7 +489,8 @@ const emptyForm = (): OrderForm => ({
   status: "aberto",
 });
 
-export default function PedidosPanel() {
+export default function PedidosPanel(props: { clientIdFilter?: string } = {}) {
+  const clientIdFilter = String(props.clientIdFilter || "").trim();
   const [ctx, setCtx] = useState<TenantCtx | null>(null);
   const [ctxLoading, setCtxLoading] = useState(true);
 
@@ -732,6 +733,8 @@ export default function PedidosPanel() {
           .eq("tenant_id", ctx.tenantId)
           .eq("status", st);
 
+        if (clientIdFilter) q = q.eq("client_id", clientIdFilter);
+
         if (ors) q = q.or(ors);
 
         const { error, count } = await q;
@@ -771,6 +774,8 @@ export default function PedidosPanel() {
       .eq("tenant_id", ctx.tenantId)
       .eq("status", status);
 
+    if (clientIdFilter) q = q.eq("client_id", clientIdFilter);
+
     if (ors) q = q.or(ors);
 
     const { data, error } = await q
@@ -794,7 +799,7 @@ export default function PedidosPanel() {
     loadStatusCounts(orderSearchDebounced);
     loadOrders(statusTab, orderSearchDebounced);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ctx, statusTab, orderSearchDebounced]);
+  }, [ctx, statusTab, orderSearchDebounced, clientIdFilter]);
 
   const resetForm = () => {
     setForm(emptyForm());
@@ -1638,6 +1643,33 @@ export default function PedidosPanel() {
             />
           </div>
 
+          <label className="block md:col-span-3">
+            <div className="text-sm font-medium mb-1">
+              Descrição (soma automática por linha)
+            </div>
+            <textarea
+              className="border rounded px-3 py-2 w-full min-h-55"
+              value={form.descricao}
+              onChange={(e) => {
+                const desc = e.target.value;
+                const total = calculateTotalFromDescription(desc);
+
+                setForm((s) => ({
+                  ...s,
+                  descricao: desc,
+                  valor:
+                    total > 0
+                      ? maskBRL(String(Math.round(total * 100)))
+                      : s.valor,
+                }));
+              }}
+              placeholder={`Ex:
+    1 AMORTECEDOR DIANTEIRO - 250
+    2 TERMINAL - 85
+    3 MAO DE OBRA - 1500`}
+            />
+          </label>
+
           {/* ✅ DESCONTO + VALOR DO DESCONTO + SUBTOTAL (mesma linha no desktop) */}
           <div className="md:col-span-3 grid grid-cols-1 md:grid-cols-3 gap-3">
             <label className="block">
@@ -1743,33 +1775,6 @@ export default function PedidosPanel() {
               </div>
             </div>
           </div>
-
-          <label className="block md:col-span-3">
-            <div className="text-sm font-medium mb-1">
-              Descrição (soma automática por linha)
-            </div>
-            <textarea
-              className="border rounded px-3 py-2 w-full min-h-55"
-              value={form.descricao}
-              onChange={(e) => {
-                const desc = e.target.value;
-                const total = calculateTotalFromDescription(desc);
-
-                setForm((s) => ({
-                  ...s,
-                  descricao: desc,
-                  valor:
-                    total > 0
-                      ? maskBRL(String(Math.round(total * 100)))
-                      : s.valor,
-                }));
-              }}
-              placeholder={`Ex:
-    1 AMORTECEDOR DIANTEIRO - 250
-    2 TERMINAL - 85
-    3 MAO DE OBRA - 1500`}
-            />
-          </label>
 
           <label className="block md:col-span-3">
             <div className="text-sm font-medium mb-1">Observação</div>
@@ -2018,7 +2023,7 @@ function Field({
 }
 
 
-function PreviewModal(props: {
+export function PreviewModal(props: {
   isOpen: boolean;
   tenant: TenantInfo | null;
   tenantLoading: boolean;
@@ -2452,238 +2457,243 @@ function PreviewModal(props: {
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center">
-      <div className="bg-white rounded-lg w-[95vw] max-w-5xl max-h-[92vh] shadow-lg overflow-hidden flex flex-col">
-        <div className="flex items-center justify-between px-5 py-4 border-b">
-          <div className="font-bold text-lg">Pré-visualização</div>
-          <button
-            className="border rounded p-2"
-            onClick={props.onClose}
-            title="Fechar"
-          >
-            <X size={18} />
-          </button>
-        </div>
+    <div className="fixed inset-0 z-50 bg-black/40">
+      <div className="min-h-full w-full flex items-start justify-center p-4">
+        <div className="bg-white rounded-lg w-[95vw] max-w-5xl h-[92vh] shadow-lg overflow-hidden flex flex-col">
+          <div className="flex items-center justify-between px-5 py-4 border-b shrink-0">
+            <div className="font-bold text-lg">Pré-visualização</div>
+            <button
+              className="border rounded p-2"
+              onClick={props.onClose}
+              title="Fechar"
+            >
+              <X size={18} />
+            </button>
+          </div>
 
-        <div className="p-5 flex-1 min-h-0">
-          <div ref={stageRef} className="overflow-auto h-full">
-            <div className="flex justify-center">
-              <div
-                style={{
-                  width: PAPER_W,
-                  transform: `scale(${scale})`,
-                  transformOrigin: "top center",
-                }}
-              >
-                {/* ✅ ESTE é o container que será impresso/baixado */}
+          <div className="p-5 flex-1 min-h-0 flex flex-col">
+            <div
+              ref={stageRef}
+              className="flex-1 min-h-0 overflow-y-scroll overflow-x-auto overscroll-contain"
+              style={{ WebkitOverflowScrolling: "touch" }}
+            >
+              <div className="flex justify-center">
                 <div
-                  ref={previewRef}
-                  className="rounded-lg bg-white text-slate-900 border border-slate-300"
                   style={{
                     width: PAPER_W,
-                    minHeight: A4_H,
-                    padding: 32,
-                    boxSizing: "border-box",
+                    transform: `scale(${scale})`,
+                    transformOrigin: "top center",
                   }}
                 >
+                  {/* ✅ ESTE é o container que será impresso/baixado */}
+                  <div
+                    ref={previewRef}
+                    className="rounded-lg bg-white text-slate-900 border border-slate-300"
+                    style={{
+                      width: PAPER_W,
+                      minHeight: A4_H,
+                      padding: 32,
+                      boxSizing: "border-box",
+                    }}
+                  >
+                    <div className="text-[15px] leading-[1.45]">
+                      {props.tenantLoading ? (
+                        <div className="text-gray-600">
+                          Carregando dados da empresa...
+                        </div>
+                      ) : (
+                        <>
+                          <div className="flex items-start justify-between gap-6">
+                            <div className="min-w-0">
+                              <div className="text-[22px] font-extrabold tracking-tight leading-tight">
+                                {props.tenant?.name || ""}
+                              </div>
 
-                  <div className="text-[15px] leading-[1.45]">
-                    {props.tenantLoading ? (
-                      <div className="text-gray-600">
-                        Carregando dados da empresa...
-                      </div>
-                    ) : (
-                      <>
-                        <div className="flex items-start justify-between gap-6">
-                          <div className="min-w-0">
-                            <div className="text-[22px] font-extrabold tracking-tight leading-tight">
-                              {props.tenant?.name || ""}
+                              <div className="mt-2 text-slate-700 space-y-1">
+                                <div className="flex flex-wrap gap-x-6 gap-y-1">
+                                  <div>
+                                    <span className="font-semibold">CNPJ:</span> {props.tenant?.cnpj || ""}
+                                  </div>
+                                  <div>
+                                    <span className="font-semibold">IE:</span> {props.tenant?.ie || ""}
+                                  </div>
+                                </div>
+
+                                <div className="truncate">
+                                  <span className="font-semibold">Endereço:</span> {props.tenant?.endereco || ""}
+                                </div>
+
+                                <div>
+                                  <span className="font-semibold">Fone:</span>{" "}
+                                  {props.tenant?.phone ? maskPhone(props.tenant.phone) : ""}
+                                </div>
+                              </div>
                             </div>
 
-                            <div className="mt-2 text-slate-700 space-y-1">
-                              <div className="flex flex-wrap gap-x-6 gap-y-1">
-                                <div>
-                                  <span className="font-semibold">CNPJ:</span> {props.tenant?.cnpj || ""}
-                                </div>
-                                <div>
-                                  <span className="font-semibold">IE:</span> {props.tenant?.ie || ""}
-                                </div>
-                              </div>
+                            <div className="shrink-0 flex flex-col items-end gap-3">
+                              {props.tenant?.logo_url ? (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img
+                                  src={getLogoSrc(props.tenant.logo_url) || ""}
+                                  alt="Logo da empresa"
+                                  className="h-18 w-45 object-contain"
+                                  crossOrigin="anonymous"
+                                  data-role="tenant-logo"
+                                />
+                              ) : null}
 
-                              <div className="truncate">
-                                <span className="font-semibold">Endereço:</span> {props.tenant?.endereco || ""}
-                              </div>
-
-                              <div>
-                                <span className="font-semibold">Fone:</span>{" "}
-                                {props.tenant?.phone ? maskPhone(props.tenant.phone) : ""}
+                              <div className="text-right">
+                                <div className="text-[12px] uppercase tracking-wide text-slate-500">
+                                  Pedido
+                                </div>
+                                <div className="text-[16px] font-bold leading-tight">
+                                  {props.order.dt_entrada || ""}
+                                </div>
+                                <div className="mt-1 inline-flex items-center rounded-full border border-slate-300 px-2 py-0.5 text-[13px] font-semibold text-slate-700">
+                                  {props.order.status || ""}
+                                </div>
                               </div>
                             </div>
                           </div>
+                        </>
+                      )}
+                    </div>
 
-                          <div className="shrink-0 flex flex-col items-end gap-3">
-                            {props.tenant?.logo_url ? (
-                              // eslint-disable-next-line @next/next/no-img-element
-                              <img
-                                src={getLogoSrc(props.tenant.logo_url) || ""}
-                                alt="Logo da empresa"
-                                className="h-18 w-45 object-contain"
-                                crossOrigin="anonymous"
-                                data-role="tenant-logo"
-                              />
-                            ) : null}
+                    <div className="my-5 border-t border-slate-200" />
 
-                            <div className="text-right">
-                              <div className="text-[12px] uppercase tracking-wide text-slate-500">
-                                Pedido
-                              </div>
-                              <div className="text-[16px] font-bold leading-tight">
-                                {props.order.dt_entrada || ""}
-                              </div>
-                              <div className="mt-1 inline-flex items-center rounded-full border border-slate-300 px-2 py-0.5 text-[13px] font-semibold text-slate-700">
-                                {props.order.status || ""}
-                              </div>
-                            </div>
+                    <div className="text-center">
+                      <div className="text-[13px] uppercase tracking-wide text-slate-500">
+                        Produto / Serviço
+                      </div>
+
+                      <div className="mt-1 font-extrabold text-[22px] leading-tight">
+                        {props.order.produto || props.order.item || ""}
+                      </div>
+
+                      {props.order.produto && props.order.item ? (
+                        <div className="mt-1 text-[15px] text-slate-700">
+                          {props.order.item}
+                        </div>
+                      ) : null}
+                    </div>
+
+                    <div className="my-5 border-t border-slate-200" />
+
+                    <div className="grid grid-cols-2 gap-4 text-[15px] leading-[1.45]">
+                      <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                        <div className="text-[12px] uppercase tracking-wide text-slate-500">
+                          Cliente
+                        </div>
+                        <div className="mt-1 font-bold text-[16px]">
+                          {props.order.cliente_nome || ""}
+                        </div>
+                        <div className="mt-1 text-slate-700">
+                          <span className="font-semibold">Fone:</span>{" "}
+                          {props.order.cliente_telefone
+                            ? maskPhone(props.order.cliente_telefone)
+                            : ""}
+                        </div>
+                      </div>
+
+                      <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                        <div className="text-[12px] uppercase tracking-wide text-slate-500">
+                          Informações
+                        </div>
+                        <div className="mt-1 text-slate-700">
+                          <span className="font-semibold">Data:</span> {props.order.dt_entrada || ""}
+                        </div>
+                        <div className="mt-1 text-slate-700">
+                          <span className="font-semibold">Status:</span> {props.order.status || ""}
+                        </div>
+                      </div>
+                    </div>
+
+                    {props.order.observacao ? (
+                      <>
+                        <div className="my-5 border-t border-slate-200" />
+                        <div className="rounded-md border-2 border-dashed border-slate-400 bg-white p-3 text-[15px] leading-[1.45]">
+                          <div className="text-[12px] uppercase tracking-wide text-slate-500">
+                            Observação
+                          </div>
+                          <div className="mt-1 text-slate-800 whitespace-pre-wrap">
+                            {props.order.observacao}
                           </div>
                         </div>
                       </>
-                    )}
-                  </div>
-
-                  <div className="my-5 border-t border-slate-200" />
-
-                  <div className="text-center">
-                    <div className="text-[13px] uppercase tracking-wide text-slate-500">
-                      Produto / Serviço
-                    </div>
-
-                    <div className="mt-1 font-extrabold text-[22px] leading-tight">
-                      {props.order.produto || props.order.item || ""}
-                    </div>
-
-                    {props.order.produto && props.order.item ? (
-                      <div className="mt-1 text-[15px] text-slate-700">
-                        {props.order.item}
-                      </div>
                     ) : null}
-                  </div>
 
-                  <div className="my-5 border-t border-slate-200" />
+                    <div className="my-5 border-t border-slate-200" />
 
-                  <div className="grid grid-cols-2 gap-4 text-[15px] leading-[1.45]">
-                    <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                      <div className="text-[12px] uppercase tracking-wide text-slate-500">
-                        Cliente
-                      </div>
-                      <div className="mt-1 font-bold text-[16px]">
-                        {props.order.cliente_nome || ""}
-                      </div>
-                      <div className="mt-1 text-slate-700">
-                        <span className="font-semibold">Fone:</span>{" "}
-                        {props.order.cliente_telefone
-                          ? maskPhone(props.order.cliente_telefone)
-                          : ""}
-                      </div>
-                    </div>
-
-                    <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                      <div className="text-[12px] uppercase tracking-wide text-slate-500">
-                        Informações
-                      </div>
-                      <div className="mt-1 text-slate-700">
-                        <span className="font-semibold">Data:</span> {props.order.dt_entrada || ""}
-                      </div>
-                      <div className="mt-1 text-slate-700">
-                        <span className="font-semibold">Status:</span> {props.order.status || ""}
-                      </div>
-                    </div>
-                  </div>
-
-                  {props.order.observacao ? (
-                    <>
-                      <div className="my-5 border-t border-slate-200" />
-                      <div className="rounded-md border-2 border-dashed border-slate-400 bg-white p-3 text-[15px] leading-[1.45]">
-                        <div className="text-[12px] uppercase tracking-wide text-slate-500">
-                          Observação
-                        </div>
-                        <div className="mt-1 text-slate-800 whitespace-pre-wrap">
-                          {props.order.observacao}
-                        </div>
-                      </div>
-                    </>
-                  ) : null}
-
-                  <div className="my-5 border-t border-slate-200" />
-
-                  <div className="overflow-auto">
-                    <table className="min-w-full border border-slate-300 text-[15px]">
-                      <thead>
-                        <tr className="bg-slate-50">
-                          <th className="border-b border-slate-300 px-3 py-2 w-20 text-left font-semibold text-slate-700">
-                            Item
-                          </th>
-                          <th className="border-b border-slate-300 px-3 py-2 text-left font-semibold text-slate-700">
-                            Descrição
-                          </th>
-                          <th className="border-b border-slate-300 px-3 py-2 w-40 text-right font-semibold text-slate-700">
-                            Valor
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-200">
-                        {itens.length === 0 ? (
-                          <tr>
-                            <td className="px-3 py-2">1</td>
-                            <td className="px-3 py-2 text-slate-600">—</td>
-                            <td className="px-3 py-2 text-right">
-                              {formatBRLFromNumber(subtotal)}
-                            </td>
+                    <div className="overflow-auto">
+                      <table className="min-w-full border border-slate-300 text-[15px]">
+                        <thead>
+                          <tr className="bg-slate-50">
+                            <th className="border-b border-slate-300 px-3 py-2 w-20 text-left font-semibold text-slate-700">
+                              Item
+                            </th>
+                            <th className="border-b border-slate-300 px-3 py-2 text-left font-semibold text-slate-700">
+                              Descrição
+                            </th>
+                            <th className="border-b border-slate-300 px-3 py-2 w-40 text-right font-semibold text-slate-700">
+                              Valor
+                            </th>
                           </tr>
-                        ) : (
-                          itens.map((it) => (
-                            <tr key={it.n}>
-                              <td className="px-3 py-2">{it.n}</td>
-                              <td className="px-3 py-2 wrap-break-word">{it.desc}</td>
+                        </thead>
+                        <tbody className="divide-y divide-slate-200">
+                          {itens.length === 0 ? (
+                            <tr>
+                              <td className="px-3 py-2">1</td>
+                              <td className="px-3 py-2 text-slate-600">—</td>
                               <td className="px-3 py-2 text-right">
-                                {formatBRLFromNumber(it.value)}
+                                {formatBRLFromNumber(subtotal)}
                               </td>
                             </tr>
-                          ))
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
+                          ) : (
+                            itens.map((it) => (
+                              <tr key={it.n}>
+                                <td className="px-3 py-2">{it.n}</td>
+                                <td className="px-3 py-2 wrap-break-word">{it.desc}</td>
+                                <td className="px-3 py-2 text-right">
+                                  {formatBRLFromNumber(it.value)}
+                                </td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
 
-                  {/* ✅ TOTAIS */}
-                  <div className="mt-5 flex items-end justify-end">
-                    <div className="w-[320px] rounded-md border border-slate-200 bg-slate-50 p-3 text-[13px]">
-                      {discount > 0 ? (
-                        <>
-                          <div className="flex items-center justify-between text-slate-700">
-                            <div className="font-semibold">
-                              Desconto{discountType === "percent" ? ` (${props.order.desconto_valor ?? 0}%)` : ""}
+                    {/* ✅ TOTAIS */}
+                    <div className="mt-5 flex items-end justify-end">
+                      <div className="w-[320px] rounded-md border border-slate-200 bg-slate-50 p-3 text-[13px]">
+                        {discount > 0 ? (
+                          <>
+                            <div className="flex items-center justify-between text-slate-700">
+                              <div className="font-semibold">
+                                Desconto{discountType === "percent" ? ` (${props.order.desconto_valor ?? 0}%)` : ""}
+                              </div>
+                              <div className="font-semibold">-{formatBRLFromNumber(discount)}</div>
                             </div>
-                            <div className="font-semibold">-{formatBRLFromNumber(discount)}</div>
-                          </div>
 
-                          <div className="mt-1 flex items-center justify-between">
+                            <div className="mt-1 flex items-center justify-between">
+                              <div className="font-semibold text-slate-700">Subtotal</div>
+                              <div className="font-semibold">{formatBRLFromNumber(subtotal)}</div>
+                            </div>
+                          </>
+                        ) : (
+                          <div className="flex items-center justify-between">
                             <div className="font-semibold text-slate-700">Subtotal</div>
                             <div className="font-semibold">{formatBRLFromNumber(subtotal)}</div>
                           </div>
-                        </>
-                      ) : (
-                        <div className="flex items-center justify-between">
-                          <div className="font-semibold text-slate-700">Subtotal</div>
-                          <div className="font-semibold">{formatBRLFromNumber(subtotal)}</div>
-                        </div>
-                      )}
+                        )}
 
-                      <div className="mt-3 pt-2 border-t border-slate-200 flex items-center justify-between">
-                        <div className="text-[13px] uppercase tracking-wide text-slate-500">
-                          Total
-                        </div>
-                        <div className="text-[24px] font-extrabold">
-                          {formatBRLFromNumber(totalFinal)}
+                        <div className="mt-3 pt-2 border-t border-slate-200 flex items-center justify-between">
+                          <div className="text-[13px] uppercase tracking-wide text-slate-500">
+                            Total
+                          </div>
+                          <div className="text-[24px] font-extrabold">
+                            {formatBRLFromNumber(totalFinal)}
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -2692,76 +2702,78 @@ function PreviewModal(props: {
               </div>
             </div>
           </div>
-        </div>
 
-        <div className="px-5 py-4 border-t bg-white shrink-0 sticky bottom-0 flex flex-wrap items-center justify-end gap-2">
-          <button
-            className="border px-3 py-2 rounded inline-flex items-center gap-2"
-            onClick={printPreview}
-          >
-            <Printer size={16} />
-            Imprimir
-          </button>
-
-          <div className="relative" ref={shareBoxRef}>
+          <div className="px-5 py-4 border-t bg-white shrink-0 flex flex-wrap items-center justify-end gap-2">
             <button
               className="border px-3 py-2 rounded inline-flex items-center gap-2"
-              onClick={() => setShareOpen((v) => !v)}
-              type="button"
+              onClick={printPreview}
             >
-              <Share2 size={16} />
-              Compartilhar
+              <Printer size={16} />
+              Imprimir
             </button>
 
-            {shareOpen && (
-              <div className="absolute right-0 bottom-full mb-2 z-50 w-64 rounded border bg-white shadow overflow-hidden">
-                <button
-                  type="button"
-                  className="w-full px-3 py-2 flex items-center gap-2 hover:bg-gray-50"
-                  onClick={async () => {
-                    setShareOpen(false);
-                    await props.onShare();
-                  }}
-                >
-                  <Copy size={16} />
-                  Copiar texto
-                </button>
+            <div className="relative" ref={shareBoxRef}>
+              <button
+                className="border px-3 py-2 rounded inline-flex items-center gap-2"
+                onClick={() => setShareOpen((v) => !v)}
+                type="button"
+              >
+                <Share2 size={16} />
+                Compartilhar
+              </button>
 
-                <button
-                  type="button"
-                  className="w-full px-3 py-2 flex items-center gap-2 hover:bg-gray-50 disabled:opacity-60"
-                  disabled={sharingImg}
-                  onClick={async () => {
-                    setShareOpen(false);
-                    await shareImage();
-                  }}
-                >
-                  <ImageIcon size={16} />
-                  {sharingImg ? "Gerando imagem..." : "Gerar / compartilhar imagem"}
-                </button>
+              {shareOpen && (
+                <div className="absolute right-0 bottom-full mb-2 z-50 w-64 rounded border bg-white shadow overflow-hidden">
+                  <button
+                    type="button"
+                    className="w-full px-3 py-2 flex items-center gap-2 hover:bg-gray-50"
+                    onClick={async () => {
+                      setShareOpen(false);
+                      await props.onShare();
+                    }}
+                  >
+                    <Copy size={16} />
+                    Copiar texto
+                  </button>
 
-                <button
-                  type="button"
-                  className="w-full px-3 py-2 flex items-center gap-2 hover:bg-gray-50 disabled:opacity-60"
-                  disabled={downloadingImg}
-                  onClick={async () => {
-                    setShareOpen(false);
-                    await downloadImage();
-                  }}
-                >
-                  <Download size={16} />
-                  {downloadingImg ? "Baixando..." : "Baixar imagem (PNG)"}
-                </button>
-              </div>
-            )}
+                  <button
+                    type="button"
+                    className="w-full px-3 py-2 flex items-center gap-2 hover:bg-gray-50 disabled:opacity-60"
+                    disabled={sharingImg}
+                    onClick={async () => {
+                      setShareOpen(false);
+                      await shareImage();
+                    }}
+                  >
+                    <ImageIcon size={16} />
+                    {sharingImg
+                      ? "Gerando imagem..."
+                      : "Gerar / compartilhar imagem"}
+                  </button>
+
+                  <button
+                    type="button"
+                    className="w-full px-3 py-2 flex items-center gap-2 hover:bg-gray-50 disabled:opacity-60"
+                    disabled={downloadingImg}
+                    onClick={async () => {
+                      setShareOpen(false);
+                      await downloadImage();
+                    }}
+                  >
+                    <Download size={16} />
+                    {downloadingImg ? "Baixando..." : "Baixar imagem (PNG)"}
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <button
+              className="bg-black text-white px-3 py-2 rounded"
+              onClick={props.onClose}
+            >
+              Fechar
+            </button>
           </div>
-
-          <button
-            className="bg-black text-white px-3 py-2 rounded"
-            onClick={props.onClose}
-          >
-            Fechar
-          </button>
         </div>
       </div>
     </div>

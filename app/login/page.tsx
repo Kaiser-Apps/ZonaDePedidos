@@ -202,6 +202,12 @@ export default function LoginPage() {
               Criar conta
             </Link>
           </div>
+
+          <div className="text-xs text-slate-600 dark:text-slate-300 text-center">
+            <Link href="/como-funciona" className="font-bold underline">
+              Como funciona
+            </Link>
+          </div>
         </div>
       </div>
     </div>

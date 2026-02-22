@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { supabase } from "../lib/supabaseClient";
 
 type TenantCtx = {
@@ -108,6 +109,7 @@ function supabaseDuplicateMessage(err: any) {
 }
 
 export default function ClientesPanel() {
+  const router = useRouter();
   const [ctx, setCtx] = useState<TenantCtx | null>(null);
   const [ctxLoading, setCtxLoading] = useState(true);
 
@@ -519,6 +521,14 @@ export default function ClientesPanel() {
                           onClick={() => pickRow(r)}
                         >
                           Editar
+                        </button>
+
+                        <button
+                          className="border px-2 py-1 rounded"
+                          type="button"
+                          onClick={() => router.push(`/clientes/${r.id}/historico`)}
+                        >
+                          Ver histórico
                         </button>
                       </div>
                     </td>

@@ -23,6 +23,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
     "/gestao-de-pedidos-gratis",
     "/criar-orcamento-gratis",
     "/para-mei",
+    "/como-funciona",
   ];
 
   return urls.map((path) => ({

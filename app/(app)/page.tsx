@@ -33,7 +33,9 @@ export default function AppHome() {
     <main className="min-h-screen">
       <div className="px-6 pt-4 flex gap-2">
         <button
-          onClick={() => setTab("pedidos")}
+          onClick={() => {
+            setTab("pedidos");
+          }}
           className={`px-4 py-2 rounded border ${
             tab === "pedidos" ? "bg-black text-white" : ""
           }`}
